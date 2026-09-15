@@ -1,3 +1,0 @@
-/home/ash_gomes/gplanner/build/CMakeFiles/my_program.dir
-/home/ash_gomes/gplanner/build/CMakeFiles/edit_cache.dir
-/home/ash_gomes/gplanner/build/CMakeFiles/rebuild_cache.dir

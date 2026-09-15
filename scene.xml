@@ -1,0 +1,46 @@
+<mujoco model="ScLERP demo">
+  <include file="../gplanner/mujoco_menagerie/kinova_gen3/gen3.xml"/>
+  <compiler meshdir="/home/ash_gomes/gplanner/mujoco_menagerie/kinova_gen3/assets"/>
+  <asset>
+    <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="flat" mark="edge"
+             rgb1="0.5 0.5 0.5" markrgb="0.32 0.32 0.32" width="128" height="128"/>
+    <material name="floor" texture="grid" texrepeat="20 20" reflectance="0"/>
+  </asset>
+  <worldbody>
+    <light pos="0 -1 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.002" material="floor"/>
+
+        <!-- Obstacles: (x, y, z), close to the arm but clear of start/goal. -->
+        <geom
+        name="obs_cylinder_1"
+        type="cylinder"
+        pos="-0.15 0.35 0.40"
+        size="0.06 0.40"
+        rgba="1 1 0 1"
+        contype="1"
+        conaffinity="1"
+    />
+
+    <geom
+        name="obs_cylinder_2"
+        type="cylinder"
+        pos="0.10 0.40 0.40"
+        size="0.06 0.40"
+        rgba="1 0.5 0 1"
+        contype="1"
+        conaffinity="1"
+    />
+
+    <geom
+        name="obs_cylinder_3"
+        type="cylinder"
+        pos="0.35 0.32 0.40"
+        size="0.06 0.40"
+        rgba="1 0 0 1"
+        contype="1"
+        conaffinity="1"
+    />
+    
+  </worldbody>
+</mujoco>

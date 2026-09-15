@@ -1,1 +1,0 @@
-/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/my_program.dir/link.d CMakeFiles/my_program.dir/main_new.cpp.o -o my_program  -Wl,-rpath,/home/ash_gomes/mujoco-install/lib /home/ash_gomes/mujoco-install/lib/libmujoco.so /usr/lib/x86_64-linux-gnu/libglfw.so.3.4

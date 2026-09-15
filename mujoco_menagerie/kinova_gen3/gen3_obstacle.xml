@@ -3,11 +3,6 @@
 
   <option integrator="implicitfast"/>
 
-  <!-- White viewer background. -->
-  <visual>
-    <rgba haze="1 1 1 1"/>
-  </visual>
-
   <default>
     <default class="visual">
       <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.75294 0.75294 0.75294 1"/>
@@ -25,12 +20,6 @@
   </default>
 
   <asset>
-    <!-- A light, non-colliding floor grid for spatial reference. -->
-    <texture name="floor_grid" type="2d" builtin="checker"
-             rgb1="0.78 0.78 0.78" rgb2="0.94 0.94 0.94"
-             width="512" height="512"/>
-    <material name="floor_grid" texture="floor_grid" texrepeat="12 12" texuniform="true"
-              reflectance="0"/>
     <mesh name="base_link" file="base_link.stl"/>
     <mesh name="shoulder_link" file="shoulder_link.stl"/>
     <mesh name="half_arm_1_link" file="half_arm_1_link.stl"/>
@@ -42,16 +31,6 @@
   </asset>
 
   <worldbody>
-    <!-- World-frame reference: X red, Y green, Z blue. -->
-    <geom name="floor_grid" type="plane" pos="0 0 -0.002" size="1.5 1.5 0.01"
-          material="floor_grid" contype="0" conaffinity="0"/>
-    <geom name="axis_x" type="cylinder" pos="0.15 0 0.012" size="0.008 0.15"
-          quat="0.707107 0 0.707107 0" rgba="0.9 0.05 0.05 1" contype="0" conaffinity="0"/>
-    <geom name="axis_y" type="cylinder" pos="0 0.15 0.012" size="0.008 0.15"
-          quat="0.707107 -0.707107 0 0" rgba="0.05 0.7 0.05 1" contype="0" conaffinity="0"/>
-    <geom name="axis_z" type="cylinder" pos="0 0 0.15" size="0.008 0.15"
-          rgba="0.05 0.2 0.9 1" contype="0" conaffinity="0"/>
-
     <body name="base_link">
       <inertial pos="-0.000648 -0.000166 0.084487" quat="0.999294 0.00139618 -0.0118387 0.035636" mass="1.697"
         diaginertia="0.00462407 0.00449437 0.00207755"/>
@@ -111,25 +90,36 @@
       </body>
     </body>
 
+        <!-- OBSTACLES to begin testing -->
+          <geom
+              name="obs_cylinder_1"
+              type="cylinder"
+              pos="-0.20 0.15 0.40"
+              size="0.06 0.40"
+              rgba="1 1 0 1"
+              contype="1"
+              conaffinity="1"
+          />
 
+          <geom
+              name="obs_cylinder_2"
+              type="cylinder"
+              pos="0.05 -0.15 0.40"
+              size="0.06 0.40"
+              rgba="1 0.5 0 1"
+              contype="1"
+              conaffinity="1"
+          />
 
-<!-- Lower Gateway Block -->
-<geom name="obs_block_1"
-      type="box"
-      pos="-0.30 -0.25 0.60"
-      size="0.04 0.04 0.04"
-      rgba="1.0 0.75 0.1 1.0"
-      contype="1"
-      conaffinity="1"/>
-
-<!-- Higher Upper-Corridor Block -->
-<geom name="obs_block_2"
-      type="box"
-      pos="-0.40 -0.05 0.55"
-      size="0.04 0.04 0.04"
-      rgba="0.2 0.7 0.9 1.0"
-      contype="1"
-      conaffinity="1"/>
+          <geom
+              name="obs_cylinder_3"
+              type="cylinder"
+              pos="0.30 0.10 0.40"
+              size="0.06 0.40"
+              rgba="1 0 0 1"
+              contype="1"
+              conaffinity="1"
+          />
   </worldbody>
 
   <actuator>
