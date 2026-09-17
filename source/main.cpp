@@ -657,6 +657,26 @@ private:
     mjData* data_ = nullptr;
 };
 
+// Check the simple joint-space motion used to replay and rewire tree edges.
+bool isJointPathCollisionFree(
+    const Eigen::Matrix<double, n, 1>& from,
+    const Eigen::Matrix<double, n, 1>& to,
+    int checks,
+    SelfCollisionChecker& self_collision_checker,
+    ObstacleCollisionChecker& obstacle_collision_checker)
+{
+    for (int i = 1; i <= checks; ++i) {
+        const double t = static_cast<double>(i) / checks;
+        const Eigen::Matrix<double, n, 1> qpos = (1.0 - t) * from + t * to;
+        if (!qpos.allFinite() ||
+            self_collision_checker.hasSelfCollision(qpos) ||
+            obstacle_collision_checker.hasObstacleCollision(qpos)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 // Forward Kinematics via Dual Quaternion PoE
 Eigen::Matrix<double, 7, 1> FK(const RobotModel& robot, const Eigen::Matrix<double, n, 1>& theta) {
@@ -732,13 +752,10 @@ int main() {
 
     const double tolerance = 1e-3;
     const double beta = 0.1;
-    bool reached_goal = false;
-    int goal_node = -1;
+    std::vector<int> goal_nodes;
 
-    // Sample a target, find its nearest node, then try one short edge.
-    for (int expansion = 0;
-         expansion < settings.max_expansions && !reached_goal;
-         ++expansion) {
+    // Grow for the whole budget so RRT* can improve its first solution.
+    for (int expansion = 0; expansion < settings.max_expansions; ++expansion) {
         const auto samples = sampleExpansionPoints(
             workspace, q.head<3>(), obstacles, settings);
 
@@ -794,15 +811,62 @@ int main() {
                 continue;
             }
 
-            const double edge_cost =
-                (reached_pose.head<3>() - tree[nearest].position).norm();
+            // Keep configurations fixed during rewiring.  This check makes
+            // the simple joint-space replay safe for every selected edge.
+            if (!isJointPathCollisionFree(
+                    tree[nearest].qpos, edge_qpos,
+                    settings.animation_frames_per_edge,
+                    collision_checker, obstacle_collision_checker)) {
+                continue;
+            }
+
             RRTNode new_node;
             new_node.position = reached_pose.head<3>();
             new_node.pose = reached_pose;
             new_node.qpos = edge_qpos;
             new_node.parent = nearest;
-            new_node.cost = tree[nearest].cost + edge_cost;
+            new_node.cost = tree[nearest].cost +
+                (new_node.position - tree[nearest].position).norm();
+
+            // RRT*: select the cheapest nearby collision-free parent.
+            const auto nearby = findNearbyNodes(
+                tree, new_node.position, settings.rewire_radius);
+            for (const int parent : nearby) {
+                const double candidate_cost = tree[parent].cost +
+                    (new_node.position - tree[parent].position).norm();
+                if (candidate_cost >= new_node.cost) {
+                    continue;
+                }
+                if (isJointPathCollisionFree(
+                        tree[parent].qpos, new_node.qpos,
+                        settings.animation_frames_per_edge,
+                        collision_checker, obstacle_collision_checker)) {
+                    new_node.parent = parent;
+                    new_node.cost = candidate_cost;
+                }
+            }
+
             tree.push_back(std::move(new_node));
+            const int new_index = static_cast<int>(tree.size()) - 1;
+
+            // RRT*: redirect nearby nodes through this node when cheaper.
+            // rewireNode also refreshes the costs of their descendants.
+            for (const int neighbor : nearby) {
+                if (neighbor == tree[new_index].parent || neighbor == 0) {
+                    continue;
+                }
+                const double rewired_cost = tree[new_index].cost +
+                    (tree[neighbor].position - tree[new_index].position).norm();
+                if (rewired_cost >= tree[neighbor].cost) {
+                    continue;
+                }
+                if (isJointPathCollisionFree(
+                        tree[new_index].qpos, tree[neighbor].qpos,
+                        settings.animation_frames_per_edge,
+                        collision_checker, obstacle_collision_checker)) {
+                    rewireNode(tree, neighbor, new_index);
+                }
+            }
 
             const double goal_position_error =
                 (q.head<3>() - reached_pose.head<3>()).norm();
@@ -810,22 +874,31 @@ int main() {
                 pose_to_dq(reached_pose).real.angularDistance(dq_q.real);
             if (goal_position_error < tolerance &&
                 goal_rotation_error < tolerance) {
-                reached_goal = true;
-                goal_node = static_cast<int>(tree.size()) - 1;
-                std::cout << "RRT reached the goal with " << tree.size()
-                          << " nodes.\n";
-                break;
+                goal_nodes.push_back(new_index);
+                if (goal_nodes.size() == 1) {
+                    std::cout << "RRT* found the goal with " << tree.size()
+                              << " nodes; continuing to improve it.\n";
+                }
             }
         }
     }
 
-    if (!reached_goal) {
-        std::cerr << "RRT did not reach the goal after "
+    if (goal_nodes.empty()) {
+        std::cerr << "RRT* did not reach the goal after "
                   << settings.max_expansions << " expansions.\n";
         return 1;
     }
 
-    // RRT branches while exploring.  Replay only its root-to-goal chain.
+    // Several samples can reach the goal; keep the cheapest final one.
+    int goal_node = goal_nodes.front();
+    for (const int node : goal_nodes) {
+        if (tree[node].cost < tree[goal_node].cost) {
+            goal_node = node;
+        }
+    }
+    std::cout << "Final RRT* path cost: " << tree[goal_node].cost << " m.\n";
+
+    // Follow parents backward, then reverse into start-to-goal order.
     std::vector<int> path;
     for (int node = goal_node; node >= 0; node = tree[node].parent) {
         path.push_back(node);

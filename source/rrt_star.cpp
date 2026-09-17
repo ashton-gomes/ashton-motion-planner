@@ -18,6 +18,9 @@ void validateSettings(const RRTStarSettings& settings) {
     if (settings.maximum_step <= 0.0) {
         throw std::invalid_argument("RRT* maximum_step must be positive.");
     }
+    if (settings.rewire_radius <= 0.0) {
+        throw std::invalid_argument("RRT* rewire_radius must be positive.");
+    }
     if (settings.max_expansions <= 0 ||
         settings.rmrc_iterations_per_edge <= 0 ||
         settings.sclerp_steps_per_edge <= 0 ||
@@ -27,6 +30,19 @@ void validateSettings(const RRTStarSettings& settings) {
     }
     if (settings.obstacle_clearance < 0.0) {
         throw std::invalid_argument("RRT* obstacle_clearance cannot be negative.");
+    }
+}
+
+// Recalculate all descendants after a node gets a cheaper parent.
+void updateChildCosts(std::vector<RRTNode>& nodes, int parent_index) {
+    for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+        if (nodes[i].parent != parent_index) {
+            continue;
+        }
+
+        nodes[i].cost = nodes[parent_index].cost +
+                        (nodes[i].position - nodes[parent_index].position).norm();
+        updateChildCosts(nodes, i);
     }
 }
 
@@ -96,4 +112,45 @@ Eigen::Vector3d steerTowards(const Eigen::Vector3d& from,
         return target;
     }
     return from + (maximum_step / distance) * direction;
+}
+
+std::vector<int> findNearbyNodes(const std::vector<RRTNode>& nodes,
+                                 const Eigen::Vector3d& point,
+                                 double radius)
+{
+    if (radius <= 0.0) {
+        throw std::invalid_argument("RRT* nearby-node radius must be positive.");
+    }
+
+    std::vector<int> nearby;
+    const double radius_squared = radius * radius;
+    for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+        if ((nodes[i].position - point).squaredNorm() <= radius_squared) {
+            nearby.push_back(i);
+        }
+    }
+    return nearby;
+}
+
+void rewireNode(std::vector<RRTNode>& nodes,
+                int node_index,
+                int new_parent_index)
+{
+    const int node_count = static_cast<int>(nodes.size());
+    if (node_index <= 0 || node_index >= node_count ||
+        new_parent_index < 0 || new_parent_index >= node_count) {
+        throw std::out_of_range("RRT* rewire node index is invalid.");
+    }
+
+    // Do not allow a node to become a child of itself or one of its children.
+    for (int parent = new_parent_index; parent >= 0; parent = nodes[parent].parent) {
+        if (parent == node_index) {
+            throw std::invalid_argument("RRT* rewire would create a cycle.");
+        }
+    }
+
+    nodes[node_index].parent = new_parent_index;
+    nodes[node_index].cost = nodes[new_parent_index].cost +
+        (nodes[node_index].position - nodes[new_parent_index].position).norm();
+    updateChildCosts(nodes, node_index);
 }

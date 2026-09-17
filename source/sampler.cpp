@@ -17,7 +17,7 @@ Eigen::Vector3d sampleWorkspacePoint(
     }
 
     static std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> coordinate(-outer_radius,
+    std::uniform_real_distribution<double> coordinate(-outer_radius,../
                                                        outer_radius);
 
     while (true) {
