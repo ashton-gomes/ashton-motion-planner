@@ -3,8 +3,82 @@
 #include <mujoco/mujoco.h>
 
 #include <algorithm>
+#include <array>
 #include <random>
 #include <stdexcept>
+
+namespace {
+
+// Set this to false to use the positions written in scene.xml.
+constexpr bool kRandomizeCylinderPlacements = true;
+
+constexpr std::array<const char*, 3> kCylinderNames = {
+    "obs_cylinder_1", "obs_cylinder_2", "obs_cylinder_3"
+};
+
+// Adjust these bounds to change where the cylinders may appear.
+constexpr double kCylinderMinX = -0.20;
+constexpr double kCylinderMaxX = 0.25;
+constexpr double kCylinderMinY = -0.35;
+constexpr double kCylinderMaxY = -0.18;
+constexpr double kCylinderZ = 0.44;
+constexpr double kMinimumCylinderSpacing = 0.13;
+
+const std::vector<Eigen::Vector3d>& randomCylinderPositions()
+{
+    static const std::vector<Eigen::Vector3d> positions = [] {
+        std::vector<Eigen::Vector3d> result;
+        if (!kRandomizeCylinderPlacements) {
+            return result;
+        }
+
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<double> x(kCylinderMinX, kCylinderMaxX);
+        std::uniform_real_distribution<double> y(kCylinderMinY, kCylinderMaxY);
+
+        for (size_t cylinder = 0; cylinder < kCylinderNames.size(); ++cylinder) {
+            bool placed = false;
+            for (int attempt = 0; attempt < 1000 && !placed; ++attempt) {
+                const Eigen::Vector3d candidate(x(rng), y(rng), kCylinderZ);
+                placed = std::all_of(
+                    result.begin(), result.end(),
+                    [&](const Eigen::Vector3d& position) {
+                        return (candidate.head<2>() - position.head<2>()).norm() >=
+                               kMinimumCylinderSpacing;
+                    });
+                if (placed) {
+                    result.push_back(candidate);
+                }
+            }
+            if (!placed) {
+                throw std::runtime_error("Could not place random cylinders without overlap.");
+            }
+        }
+        return result;
+    }();
+    return positions;
+}
+
+} // namespace
+
+void applyCylinderPlacements(mjModel* model)
+{
+    if (!model || !kRandomizeCylinderPlacements) {
+        return;
+    }
+
+    const auto& positions = randomCylinderPositions();
+    for (size_t i = 0; i < kCylinderNames.size(); ++i) {
+        const int geom = mj_name2id(model, mjOBJ_GEOM, kCylinderNames[i]);
+        if (geom < 0) {
+            throw std::runtime_error(
+                std::string("Cylinder geom not found: ") + kCylinderNames[i]);
+        }
+        model->geom_pos[3 * geom] = positions[i].x();
+        model->geom_pos[3 * geom + 1] = positions[i].y();
+        model->geom_pos[3 * geom + 2] = positions[i].z();
+    }
+}
 
 Eigen::Vector3d sampleWorkspacePoint(
     const Eigen::Vector3d& workspace_center,
@@ -16,10 +90,12 @@ Eigen::Vector3d sampleWorkspacePoint(
         throw std::invalid_argument("Workspace radii are invalid.");
     }
 
+        // point within environment 
     static std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> coordinate(-outer_radius,../
+    std::uniform_real_distribution<double> coordinate(-outer_radius,
                                                        outer_radius);
 
+        // sampling point from the center of defined workspace by URDF
     while (true) {
         const Eigen::Vector3d point = workspace_center + Eigen::Vector3d(
             coordinate(rng), coordinate(rng), coordinate(rng));
@@ -29,6 +105,19 @@ Eigen::Vector3d sampleWorkspacePoint(
             return point;
         }
     }
+}
+
+// Random Quaternion 
+
+Eigen::Quaterniond sampleQuaternion() {
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<double> coordinate(-1.0, 1.0);
+    double x,y,z, u,v,w, s;
+    do { x = coordinate(rng); y = coordinate(rng); z = x*x + y*y; } while (z > 1);
+    do { u = coordinate(rng); v = coordinate(rng); w = u*u + v*v; } while (w > 1);
+    s = sqrt((1-z) / w);
+    return Eigen::Quaterniond(x, y, s*u, s*v);
+
 }
 
 std::vector<SceneObstacle> loadSceneObstacles(
@@ -44,6 +133,7 @@ std::vector<SceneObstacle> loadSceneObstacles(
     if (!model) {
         throw std::runtime_error(std::string("Scene load error: ") + error);
     }
+    applyCylinderPlacements(model);
     mjData* data = mj_makeData(model);
     if (!data) {
         mj_deleteModel(model);

@@ -8,6 +8,7 @@
 
 namespace {
 
+    // just to make sure the parameters set are good 
 void validateSettings(const RRTStarSettings& settings) {
     if (settings.goal_bias < 0.0 || settings.goal_bias > 1.0) {
         throw std::invalid_argument("RRT* goal_bias must be in [0, 1].");
@@ -57,7 +58,7 @@ std::vector<Eigen::Vector3d> sampleExpansionPoints(
     validateSettings(settings);
 
     static std::mt19937 rng(std::random_device{}());
-    std::bernoulli_distribution choose_goal(settings.goal_bias);
+    std::bernoulli_distribution choose_goal(settings.goal_bias);    // certain amount of points to goal bias 
 
     std::vector<Eigen::Vector3d> samples;
     samples.reserve(settings.samples_per_expansion);

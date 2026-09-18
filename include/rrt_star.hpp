@@ -11,7 +11,7 @@ struct RRTStarSettings {
     int samples_per_expansion = 10;   // Candidate samples for one expansion.
     double maximum_step = 0.05;       // Maximum Cartesian edge length, in metres.
     double rewire_radius = 0.10;       // Radius used to choose parents and rewire.
-    int max_expansions = 500;         // Planning batches before returning the best path.
+    int max_expansions = 200;         // Planning batches before returning the best path.
     int rmrc_iterations_per_edge = 100;
     int sclerp_steps_per_edge = 20;
     int animation_frames_per_edge = 24;

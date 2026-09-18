@@ -189,6 +189,21 @@ DQ ScLERP(const DQ& a_dq, const DQ& b_dq, double tau) {
     return C_t; 
 }
 
+// Return a rotation partway from the current pose to the end pose.
+Eigen::Quaterniond rot_diff(
+    const Eigen::Matrix<double, 7, 1>& current,
+    const Eigen::Matrix<double, 7, 1>& end,
+    double tau)
+{
+    Eigen::Quaterniond current_rotation(
+        current[3], current[4], current[5], current[6]);
+    Eigen::Quaterniond end_rotation(end[3], end[4], end[5], end[6]);
+
+    current_rotation.normalize();
+    end_rotation.normalize();
+    return current_rotation.slerp(tau, end_rotation).normalized();
+}
+
 
 // getting rotation from dual quaternion: 
 
@@ -610,6 +625,7 @@ public:
         if (!model_) {
             throw std::runtime_error(std::string("Scene collision load error: ") + error);
         }
+        applyCylinderPlacements(model_);
         for (int geom = 0; geom < model_->ngeom; ++geom) {
             if (isObstacleGeom(geom)) {
                 model_->geom_margin[geom] += clearance;
@@ -697,16 +713,34 @@ int main() {
     RobotModel robot = extractURDF(ROBOT_XML_PATH);
     SelfCollisionChecker collision_checker(ROBOT_XML_PATH);
 
+    RRTStarSettings settings;
+        const auto obstacles = loadSceneObstacles(
+        SCENE_XML_PATH, settings.obstacle_clearance);
+    // if (isPointInsideObstacle(q.head<3>(), obstacles)) {
+    //     std::cerr << "Goal position is inside an inflated scene obstacle.\n";
+    //     return 1;
+    // }
+
     // The start pose and configuration come from the model's "home" keyframe.
 
     // defined as (x, y, z, rotation quaternion) (7 value vector)
     Eigen::Matrix<double, 7, 1> p = robot.home_pose, q;
 
-    // q << 0.25, 0.25, 0.25, p[3], p[4]+0.25, p[5]-0.1, p[6]+0.75;
-    // q << p.x() + 0.4, p.y() + 0, p.z() + 0.3, p[3], p[4]+0.25, p[5]-0.1, p[6]+0.75;
-    q << robot.workspace_center.x() - 0.3, robot.workspace_center.y() - 0.2, robot.workspace_center.z() + 0.3,
-    p[3] - 0,  p[4] - 0, p[5] - 1, p[6] - 0;
+    // q << robot.workspace_center.x() - 0.3, robot.workspace_center.y() - 0.2, robot.workspace_center.z() + 0.3,
+    // p[3] - 0,  p[4] - 0, p[5] - 1, p[6] - 0;
   
+    // Random start pose below that is valid considering the obstacles:
+
+    Eigen::Vector3d q_pos = sampleWorkspacePointAvoidingObstacles(
+        robot.workspace_center, 
+        robot.workspace_inner_radius, 
+        robot.workspace_outer_radius,
+        obstacles,
+        settings.obstacle_sample_attempts);
+
+    Eigen::Quaterniond q_rot = sampleQuaternion(); 
+
+    q << q_pos, q_rot.w(), q_rot.x(), q_rot.y(), q_rot.z(); 
 
 
     const double q_radius = (q.head<3>() - robot.workspace_center).norm();
@@ -719,7 +753,7 @@ int main() {
     }
 
     const DQ dq_q = pose_to_dq(q);
-    RRTStarSettings settings;
+    // RRTStarSettings settings;
     ObstacleCollisionChecker obstacle_collision_checker(
         SCENE_XML_PATH, settings.obstacle_clearance);
 
@@ -728,12 +762,7 @@ int main() {
         robot.workspace_inner_radius,
         robot.workspace_outer_radius,
     };
-    const auto obstacles = loadSceneObstacles(
-        SCENE_XML_PATH, settings.obstacle_clearance);
-    if (isPointInsideObstacle(q.head<3>(), obstacles)) {
-        std::cerr << "Goal position is inside an inflated scene obstacle.\n";
-        return 1;
-    }
+
     // One tree, rooted at the robot's home pose.
     RRTNode root;
     root.position = p.head<3>();
@@ -767,15 +796,21 @@ int main() {
                 continue;
             }
 
-            const bool reaches_goal_position =
-                (new_position - q.head<3>()).norm() < 1e-9;
             Eigen::Matrix<double, 7, 1> edge_end = tree[nearest].pose;
             edge_end.head<3>() = new_position;
-            // Random edges preserve orientation.  The final goal edge uses
-            // the requested orientation as well as the requested position.
-            if (reaches_goal_position) {
-                edge_end.tail<4>() = q.tail<4>();
-            }
+
+            const double distance_to_goal =
+                (q.head<3>() - tree[nearest].position).norm();
+            const double edge_length =
+                (new_position - tree[nearest].position).norm();
+            const double rotation_fraction = distance_to_goal > 1e-9
+                ? std::min(edge_length / distance_to_goal, 1.0)
+                : 1.0;
+            const Eigen::Quaterniond intermediate_rotation =
+                rot_diff(tree[nearest].pose, q, rotation_fraction);
+            edge_end.tail<4>() << intermediate_rotation.w(),
+                intermediate_rotation.x(), intermediate_rotation.y(),
+                intermediate_rotation.z();
 
             const DQ edge_start_dq = pose_to_dq(tree[nearest].pose);
             const DQ edge_end_dq = pose_to_dq(edge_end);

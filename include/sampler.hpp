@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <mujoco/mujoco.h>
 
 #include <string>
 #include <vector>
@@ -23,6 +24,14 @@ Eigen::Vector3d sampleWorkspacePoint(
     const Eigen::Vector3d& workspace_center,
     double inner_radius,
     double outer_radius);
+
+
+// Ramdom quaternion implementation for full pose sampling later 
+Eigen::Quaterniond sampleQuaternion();
+
+// Apply the shared per-run cylinder positions to a loaded scene model.
+// Randomization can be disabled with one toggle in source/sampler.cpp.
+void applyCylinderPlacements(mjModel* model);
 
 // Load static physical obstacles from a MuJoCo scene.  This project puts
 // robot collision meshes in group 3, so they and the floor plane are skipped.

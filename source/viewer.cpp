@@ -1,4 +1,5 @@
 #include "viewer.hpp"
+#include "sampler.hpp"
 #include <Eigen/Geometry>
 #include <cstdio>
 #include <memory>
@@ -15,6 +16,7 @@ int MujocoViewer::play(const std::string& scene_path,
         std::cerr << error << '\n';
         return 1;
     }
+    applyCylinderPlacements(model.get());
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model.get()), mj_deleteData);
     if (!data) return 1;
     for (const auto& joints : trajectory) {
