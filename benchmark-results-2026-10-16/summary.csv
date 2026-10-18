@@ -1,0 +1,6 @@
+condition,scene,trials,successes,success_rate_percent,valid_paths,valid_path_rate_percent,mean_planning_seconds
+direct_empty,empty.xml,1000,836,83.6,717,71.7,0.46912016391399997
+sampled_empty,empty.xml,1000,991,99.1,586,58.6,0.350832000248
+sampled_obstacles_1,obstacles_1.xml,1000,985,98.5,493,49.3,0.629966933696
+sampled_obstacles_2,obstacles_2.xml,1000,978,97.8,624,62.4,0.520248146232
+sampled_obstacles_3,obstacles_3.xml,1000,946,94.6,538,53.8,0.8794568444499999

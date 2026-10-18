@@ -3,8 +3,14 @@
 #include <Eigen/Dense>
 #include <mujoco/mujoco.h>
 
+#include <functional>
+#include <cstdint>
 #include <string>
 #include <vector>
+
+// Reset independent random streams and the shared cylinder-placement cache.
+// Call before constructing models; false keeps the scene's XML placements.
+void seedSampling(std::uint32_t seed, bool randomize_cylinders = true);
 
 // Static MuJoCo obstacle geometry.  safety_clearance inflates the shape when
 // deciding whether a Cartesian sample is valid.
@@ -28,6 +34,16 @@ Eigen::Vector3d sampleWorkspacePoint(
 
 // Ramdom quaternion implementation for full pose sampling later 
 Eigen::Quaterniond sampleQuaternion();
+
+// Derive position and orientation together from joints within their limits.
+// is_valid can reuse the caller's workspace and collision checks. This ensures
+// an accepted goal configuration exists, but does not guarantee a path to it.
+Eigen::Matrix<double, 7, 1> sampleReachablePose(
+    const Eigen::VectorXd& lower_limits,
+    const Eigen::VectorXd& upper_limits,
+    const std::function<Eigen::Matrix<double, 7, 1>(const Eigen::VectorXd&)>& forward_kinematics,
+    const std::function<bool(const Eigen::VectorXd&, const Eigen::Matrix<double, 7, 1>&)>& is_valid,
+    int max_attempts);
 
 // Apply the shared per-run cylinder positions to a loaded scene model.
 // Randomization can be disabled with one toggle in source/sampler.cpp.

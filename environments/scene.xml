@@ -1,5 +1,5 @@
 <mujoco model="ScLERP demo">
-  <include file="../gplanner/mujoco_menagerie/kinova_gen3/gen3.xml"/>
+  <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
   <compiler meshdir="/home/ash_gomes/gplanner/mujoco_menagerie/kinova_gen3/assets"/>
   <asset>
     <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
@@ -12,7 +12,7 @@
     <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.002" material="floor"/>
 
         <!-- These are the fallback static positions. Set
-             kRandomizeCylinderPlacements=false in source/sampler.cpp to use them. -->
+             randomizeCylinderPlacements=false in source/sampler.cpp to use them. -->
         <geom
         name="obs_cylinder_1"
         type="cylinder"

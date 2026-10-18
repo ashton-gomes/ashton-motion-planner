@@ -9,8 +9,13 @@
 
 namespace {
 
-// Set this to false to use the positions written in scene.xml.
-constexpr bool kRandomizeCylinderPlacements = true;
+// Interactive runs randomize cylinders; benchmarks can disable this with seedSampling.
+bool randomizeCylinderPlacements = true;
+std::mt19937 cylinderRng(std::random_device{}());
+std::mt19937 workspaceRng(std::random_device{}());
+std::mt19937 quaternionRng(std::random_device{}());
+std::mt19937 goalRng(std::random_device{}());
+std::vector<Eigen::Vector3d> cylinderPositions;
 
 constexpr std::array<const char*, 3> kCylinderNames = {
     "obs_cylinder_1", "obs_cylinder_2", "obs_cylinder_3"
@@ -26,44 +31,42 @@ constexpr double kMinimumCylinderSpacing = 0.13;
 
 const std::vector<Eigen::Vector3d>& randomCylinderPositions()
 {
-    static const std::vector<Eigen::Vector3d> positions = [] {
-        std::vector<Eigen::Vector3d> result;
-        if (!kRandomizeCylinderPlacements) {
-            return result;
+    if (!cylinderPositions.empty()) return cylinderPositions;
+    std::vector<Eigen::Vector3d> result;
+    std::uniform_real_distribution<double> x(kCylinderMinX, kCylinderMaxX);
+    std::uniform_real_distribution<double> y(kCylinderMinY, kCylinderMaxY);
+    for (size_t cylinder = 0; cylinder < kCylinderNames.size(); ++cylinder) {
+        bool placed = false;
+        for (int attempt = 0; attempt < 1000 && !placed; ++attempt) {
+            const Eigen::Vector3d candidate(x(cylinderRng), y(cylinderRng), kCylinderZ);
+            placed = std::all_of(result.begin(), result.end(),
+                [&](const Eigen::Vector3d& position) {
+                    return (candidate.head<2>() - position.head<2>()).norm() >=
+                           kMinimumCylinderSpacing;
+                });
+            if (placed) result.push_back(candidate);
         }
-
-        std::mt19937 rng(std::random_device{}());
-        std::uniform_real_distribution<double> x(kCylinderMinX, kCylinderMaxX);
-        std::uniform_real_distribution<double> y(kCylinderMinY, kCylinderMaxY);
-
-        for (size_t cylinder = 0; cylinder < kCylinderNames.size(); ++cylinder) {
-            bool placed = false;
-            for (int attempt = 0; attempt < 1000 && !placed; ++attempt) {
-                const Eigen::Vector3d candidate(x(rng), y(rng), kCylinderZ);
-                placed = std::all_of(
-                    result.begin(), result.end(),
-                    [&](const Eigen::Vector3d& position) {
-                        return (candidate.head<2>() - position.head<2>()).norm() >=
-                               kMinimumCylinderSpacing;
-                    });
-                if (placed) {
-                    result.push_back(candidate);
-                }
-            }
-            if (!placed) {
-                throw std::runtime_error("Could not place random cylinders without overlap.");
-            }
-        }
-        return result;
-    }();
-    return positions;
+        if (!placed) throw std::runtime_error("Could not place random cylinders without overlap.");
+    }
+    cylinderPositions = std::move(result);
+    return cylinderPositions;
 }
 
 } // namespace
 
+void seedSampling(std::uint32_t seed, bool randomize_cylinders)
+{
+    cylinderRng.seed(seed + 101u);
+    workspaceRng.seed(seed + 102u);
+    quaternionRng.seed(seed + 103u);
+    goalRng.seed(seed + 104u);
+    randomizeCylinderPlacements = randomize_cylinders;
+    cylinderPositions.clear();
+}
+
 void applyCylinderPlacements(mjModel* model)
 {
-    if (!model || !kRandomizeCylinderPlacements) {
+    if (!model || !randomizeCylinderPlacements) {
         return;
     }
 
@@ -71,8 +74,7 @@ void applyCylinderPlacements(mjModel* model)
     for (size_t i = 0; i < kCylinderNames.size(); ++i) {
         const int geom = mj_name2id(model, mjOBJ_GEOM, kCylinderNames[i]);
         if (geom < 0) {
-            throw std::runtime_error(
-                std::string("Cylinder geom not found: ") + kCylinderNames[i]);
+            continue; // Other environments need not contain these cylinders.
         }
         model->geom_pos[3 * geom] = positions[i].x();
         model->geom_pos[3 * geom + 1] = positions[i].y();
@@ -91,14 +93,13 @@ Eigen::Vector3d sampleWorkspacePoint(
     }
 
         // point within environment 
-    static std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> coordinate(-outer_radius,
                                                        outer_radius);
 
         // sampling point from the center of defined workspace by URDF
     while (true) {
         const Eigen::Vector3d point = workspace_center + Eigen::Vector3d(
-            coordinate(rng), coordinate(rng), coordinate(rng));
+            coordinate(workspaceRng), coordinate(workspaceRng), coordinate(workspaceRng));
         const double radius = (point - workspace_center).norm();
 
         if (radius >= inner_radius && radius <= outer_radius) {
@@ -110,14 +111,39 @@ Eigen::Vector3d sampleWorkspacePoint(
 // Random Quaternion 
 
 Eigen::Quaterniond sampleQuaternion() {
-    static std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> coordinate(-1.0, 1.0);
     double x,y,z, u,v,w, s;
-    do { x = coordinate(rng); y = coordinate(rng); z = x*x + y*y; } while (z > 1);
-    do { u = coordinate(rng); v = coordinate(rng); w = u*u + v*v; } while (w > 1);
+    do { x = coordinate(quaternionRng); y = coordinate(quaternionRng); z = x*x + y*y; } while (z > 1);
+    do { u = coordinate(quaternionRng); v = coordinate(quaternionRng); w = u*u + v*v; } while (w > 1 || w == 0);
     s = sqrt((1-z) / w);
     return Eigen::Quaterniond(x, y, s*u, s*v);
 
+}
+
+Eigen::Matrix<double, 7, 1> sampleReachablePose(
+    const Eigen::VectorXd& lower_limits,
+    const Eigen::VectorXd& upper_limits,
+    const std::function<Eigen::Matrix<double, 7, 1>(const Eigen::VectorXd&)>& forward_kinematics,
+    const std::function<bool(const Eigen::VectorXd&, const Eigen::Matrix<double, 7, 1>&)>& is_valid,
+    int max_attempts)
+{
+    if (max_attempts <= 0 || lower_limits.size() == 0 ||
+        lower_limits.size() != upper_limits.size() ||
+        !lower_limits.allFinite() || !upper_limits.allFinite() ||
+        (lower_limits.array() > upper_limits.array()).any()) {
+        throw std::invalid_argument("Reachable-pose sampling requires valid joint limits and positive attempts.");
+    }
+
+    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        Eigen::VectorXd joints(lower_limits.size());
+        for (int joint = 0; joint < joints.size(); ++joint) {
+            std::uniform_real_distribution<double> angle(lower_limits[joint], upper_limits[joint]);
+            joints[joint] = angle(goalRng);
+        }
+        const auto pose = forward_kinematics(joints);
+        if (pose.allFinite() && is_valid(joints, pose)) return pose;
+    }
+    throw std::runtime_error("Could not sample a valid reachable pose within the attempt limit.");
 }
 
 std::vector<SceneObstacle> loadSceneObstacles(

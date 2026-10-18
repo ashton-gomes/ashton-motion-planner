@@ -5,21 +5,19 @@
 #include <limits>
 #include <random>
 #include <stdexcept>
+#include <utility>
 
-namespace {
-
-    // just to make sure the parameters set are good 
-void validateSettings(const RRTStarSettings& settings) {
-    if (settings.goal_bias < 0.0 || settings.goal_bias > 1.0) {
-        throw std::invalid_argument("RRT* goal_bias must be in [0, 1].");
+void validateRRTSettings(const RRTStarSettings& settings) {
+    if (settings.use_goal_bias && (settings.goal_bias < 0.0 || settings.goal_bias > 1.0)) {
+        throw std::invalid_argument("RRT goal_bias must be in [0, 1].");
     }
     if (settings.samples_per_expansion <= 0) {
-        throw std::invalid_argument("RRT* samples_per_expansion must be positive.");
+        throw std::invalid_argument("RRT samples_per_expansion must be positive.");
     }
     if (settings.maximum_step <= 0.0) {
-        throw std::invalid_argument("RRT* maximum_step must be positive.");
+        throw std::invalid_argument("RRT maximum_step must be positive.");
     }
-    if (settings.rewire_radius <= 0.0) {
+    if (settings.use_rrt_star && settings.rewire_radius <= 0.0) {
         throw std::invalid_argument("RRT* rewire_radius must be positive.");
     }
     if (settings.max_expansions <= 0 ||
@@ -27,12 +25,15 @@ void validateSettings(const RRTStarSettings& settings) {
         settings.sclerp_steps_per_edge <= 0 ||
         settings.animation_frames_per_edge <= 0 ||
         settings.obstacle_sample_attempts <= 0) {
-        throw std::invalid_argument("RRT* iteration counts must be positive.");
+        throw std::invalid_argument("RRT iteration counts must be positive.");
     }
     if (settings.obstacle_clearance < 0.0) {
-        throw std::invalid_argument("RRT* obstacle_clearance cannot be negative.");
+        throw std::invalid_argument("RRT obstacle_clearance cannot be negative.");
     }
 }
+
+namespace {
+std::mt19937 expansionRng(std::random_device{}());
 
 // Recalculate all descendants after a node gets a cheaper parent.
 void updateChildCosts(std::vector<RRTNode>& nodes, int parent_index) {
@@ -49,30 +50,43 @@ void updateChildCosts(std::vector<RRTNode>& nodes, int parent_index) {
 
 } // namespace
 
+void seedRRTSampling(std::uint32_t seed) {
+    expansionRng.seed(seed + 1001u);
+}
+
+Eigen::Vector3d sampleExpansionPoint(
+    const WorkspaceSamplingBounds& workspace,
+    const Eigen::Vector3d& goal,
+    const std::vector<SceneObstacle>& obstacles,
+    const RRTStarSettings& settings,
+    int attempt)
+{
+    validateRRTSettings(settings);
+    if (attempt < 0) {
+        throw std::invalid_argument("Expansion attempt cannot be negative.");
+    }
+    if (!settings.use_goal_bias && attempt == 0) return goal;
+
+    if (settings.use_goal_bias && std::bernoulli_distribution(settings.goal_bias)(expansionRng)) {
+        return goal;
+    }
+    return sampleWorkspacePointAvoidingObstacles(
+        workspace.center, workspace.inner_radius, workspace.outer_radius,
+        obstacles, settings.obstacle_sample_attempts);
+}
+
 std::vector<Eigen::Vector3d> sampleExpansionPoints(
     const WorkspaceSamplingBounds& workspace,
     const Eigen::Vector3d& goal,
     const std::vector<SceneObstacle>& obstacles,
     const RRTStarSettings& settings)
 {
-    validateSettings(settings);
-
-    static std::mt19937 rng(std::random_device{}());
-    std::bernoulli_distribution choose_goal(settings.goal_bias);    // certain amount of points to goal bias 
-
+    validateRRTSettings(settings);
+    const int attempts = settings.samples_per_expansion + (settings.use_goal_bias ? 0 : 1);
     std::vector<Eigen::Vector3d> samples;
-    samples.reserve(settings.samples_per_expansion);
-    for (int i = 0; i < settings.samples_per_expansion; ++i) {
-        if (choose_goal(rng)) {
-            samples.push_back(goal);
-        } else {
-            samples.push_back(sampleWorkspacePointAvoidingObstacles(
-                workspace.center,
-                workspace.inner_radius,
-                workspace.outer_radius,
-                obstacles,
-                settings.obstacle_sample_attempts));
-        }
+    samples.reserve(attempts);
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        samples.push_back(sampleExpansionPoint(workspace, goal, obstacles, settings, attempt));
     }
     return samples;
 }
@@ -99,12 +113,37 @@ int findNearestNode(const std::vector<RRTNode>& nodes,
     return nearest_index;
 }
 
+int selectGoalExpansionNode(const std::vector<RRTNode>& nodes,
+                            const Eigen::Vector3d& goal,
+                            std::vector<bool>& attempted)
+{
+    attempted.resize(nodes.size(), false);
+    if (nodes.empty()) return -1;
+
+    int selected = -1;
+    if (!attempted.back()) {
+        selected = static_cast<int>(nodes.size()) - 1;
+    } else {
+        double nearest_distance = std::numeric_limits<double>::infinity();
+        for (int node = 0; node < static_cast<int>(nodes.size()); ++node) {
+            if (attempted[node]) continue;
+            const double distance = (nodes[node].position - goal).squaredNorm();
+            if (distance < nearest_distance) {
+                selected = node;
+                nearest_distance = distance;
+            }
+        }
+    }
+    if (selected >= 0) attempted[selected] = true;
+    return selected;
+}
+
 Eigen::Vector3d steerTowards(const Eigen::Vector3d& from,
                               const Eigen::Vector3d& target,
                               double maximum_step)
 {
     if (maximum_step <= 0.0) {
-        throw std::invalid_argument("RRT* maximum_step must be positive.");
+        throw std::invalid_argument("RRT maximum_step must be positive.");
     }
 
     const Eigen::Vector3d direction = target - from;
@@ -154,4 +193,37 @@ void rewireNode(std::vector<RRTNode>& nodes,
     nodes[node_index].cost = nodes[new_parent_index].cost +
         (nodes[node_index].position - nodes[new_parent_index].position).norm();
     updateChildCosts(nodes, node_index);
+}
+
+int addRRTNode(
+    std::vector<RRTNode>& nodes,
+    RRTNode node,
+    const RRTStarSettings& settings,
+    const std::function<bool(const Eigen::VectorXd&, const Eigen::VectorXd&)>& is_edge_valid)
+{
+    std::vector<int> nearby;
+    if (settings.use_rrt_star) {
+        nearby = findNearbyNodes(nodes, node.position, settings.rewire_radius);
+        for (const int parent : nearby) {
+            const double cost = nodes[parent].cost +
+                (node.position - nodes[parent].position).norm();
+            if (cost < node.cost && is_edge_valid(nodes[parent].qpos, node.qpos)) {
+                node.parent = parent;
+                node.cost = cost;
+            }
+        }
+    }
+
+    nodes.push_back(std::move(node));
+    const int new_index = static_cast<int>(nodes.size()) - 1;
+    for (const int neighbor : nearby) {
+        if (neighbor == 0 || neighbor == nodes[new_index].parent) continue;
+        const double cost = nodes[new_index].cost +
+            (nodes[neighbor].position - nodes[new_index].position).norm();
+        if (cost < nodes[neighbor].cost &&
+            is_edge_valid(nodes[new_index].qpos, nodes[neighbor].qpos)) {
+            rewireNode(nodes, neighbor, new_index);
+        }
+    }
+    return new_index;
 }
