@@ -86,10 +86,4 @@ it displays that configuration. Close the viewer to exit; a failed plan still
 returns exit code 1. The helper lives in `planner_debug.hpp`/`planner_debug.cpp`.
 Rejection counts describe observed checks; they do not prove the goal is unreachable.
 
-Run `./build/benchmark` for the October 9 trial comparison: 1,000 trials of direct
-ScLERP, 1,000 with node sampling in empty space, and 1,000 in each of three fixed
-obstacle layouts. It runs without a viewer and writes per-trial and summary CSVs.
-See [BENCHMARK.md](BENCHMARK.md) for commands, reproducible seeds, success criteria,
-and the distinction between reaching a goal and passing full path validation.
-Planning is shared by the benchmark and interactive viewer through
-`MotionPlanner` in `include/planner.hpp`.
+
