@@ -194,6 +194,23 @@ std::vector<SceneObstacle> loadSceneObstacles(
     return obstacles;
 }
 
+std::optional<Eigen::VectorXd> loadSceneKeyframe(const std::string& scene_path,
+                                                 const std::string& name)
+{
+    char error[500]{};
+    mjModel* model = mj_loadXML(scene_path.c_str(), nullptr, error, sizeof(error));
+    if (!model) {
+        throw std::runtime_error(std::string("Scene load error: ") + error);
+    }
+    std::optional<Eigen::VectorXd> qpos;
+    const int key = mj_name2id(model, mjOBJ_KEY, name.c_str());
+    if (key >= 0) {
+        qpos = Eigen::Map<const Eigen::VectorXd>(&model->key_qpos[key * model->nq], model->nq);
+    }
+    mj_deleteModel(model);
+    return qpos;
+}
+
 bool isPointInsideObstacle(const Eigen::Vector3d& point,
                            const std::vector<SceneObstacle>& obstacles)
 {

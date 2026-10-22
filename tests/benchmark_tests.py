@@ -28,7 +28,7 @@ def main():
         first_dir = Path(temp) / 'first'
         trials, summaries = run(binary, first_dir)
         repeated, _ = run(binary, Path(temp) / 'repeated')
-        assert len(trials) == len(summaries) == 5
+        assert len(trials) == len(summaries) == 7
         assert any(row['success'] == '0' for row in trials), 'Failures must remain in the results'
         goal_columns = ['goal_x', 'goal_y', 'goal_z', 'goal_w', 'goal_qx', 'goal_qy', 'goal_qz']
         assert all(trials[0][key] == trials[1][key] for key in goal_columns), 'Empty tasks must be paired'

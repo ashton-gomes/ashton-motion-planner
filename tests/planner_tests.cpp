@@ -5,12 +5,35 @@
 #include <iostream>
 #include <stdexcept>
 
-void require(bool condition, const char* message) {
+void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+// Every scene must load. A scene with a fixed task must also block the direct
+// straight-line motion; otherwise it does not test planning. The planner itself
+// rejects start or goal keyframes that are in collision.
+void checkEnvironments() {
+    for (const auto& entry : std::filesystem::directory_iterator(ENVIRONMENTS_PATH)) {
+        if (entry.path().extension() != ".xml") continue;
+        const std::string name = entry.path().filename().string();
+        seedSampling(1, false);
+        MotionPlanner planner(ROBOT_XML_PATH, entry.path().string());
+        if (!planner.sceneGoal()) continue;
+        const Pose& goal = *planner.sceneGoal();
+        require((goal.head<3>() - planner.homePose().head<3>()).norm() > 0.1,
+                name + ": the fixed goal must be away from the start.");
+        const auto direct = planner.plan(goal, PlannerMode::DirectScLERP);
+        require(direct.failure_reason == "direct_edge_rejected",
+                name + ": the scene must block the direct motion, got '" +
+                (direct.success ? std::string("success") : direct.failure_reason) + "'.");
+        require(direct.stats.obstacle_collision + direct.stats.joint_path_collision > 0,
+                name + ": the direct motion must be blocked by an obstacle.");
+    }
 }
 
 int main() {
     try {
+        checkEnvironments();
         seedSampling(1, false);
         seedRRTSampling(1);
         MotionPlanner planner(ROBOT_XML_PATH,

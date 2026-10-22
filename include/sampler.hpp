@@ -4,6 +4,7 @@
 #include <mujoco/mujoco.h>
 
 #include <functional>
+#include <optional>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -54,6 +55,11 @@ void applyCylinderPlacements(mjModel* model);
 std::vector<SceneObstacle> loadSceneObstacles(
     const std::string& scene_path,
     double safety_clearance);
+
+// Read a named keyframe's joint positions from a scene XML. Scenes may define
+// "start" and "goal" keyframes to fix a planning task; returns nullopt if absent.
+std::optional<Eigen::VectorXd> loadSceneKeyframe(const std::string& scene_path,
+                                                 const std::string& name);
 
 bool isPointInsideObstacle(const Eigen::Vector3d& point,
                            const std::vector<SceneObstacle>& obstacles);

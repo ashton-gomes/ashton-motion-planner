@@ -1,0 +1,34 @@
+<!-- Under the table: the goal is beneath a tabletop directly below the start.
+     The straight-line motion goes through the tabletop, so the arm has to drop
+     down in front of the near edge and reach in under it. -->
+<mujoco model="Under the table">
+  <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
+  <compiler meshdir="../mujoco_menagerie/kinova_gen3/assets"/>
+  <asset>
+    <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="flat" mark="edge"
+             rgb1="0.5 0.5 0.5" markrgb="0.32 0.32 0.32" width="128" height="128"/>
+    <material name="floor" texture="grid" texrepeat="20 20" reflectance="0"/>
+  </asset>
+  <default>
+    <default class="table">
+      <geom type="box" rgba="0.6 0.4 0.25 1"/>
+    </default>
+  </default>
+  <worldbody>
+    <light pos="0 -1 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.002" material="floor"/>
+    <!-- Tabletop: x = 0.45..0.85, y = -0.35..0.35, z = 0.33..0.36. Legs at the corners. -->
+    <geom name="table_top" class="table" pos="0.65 0 0.345" size="0.20 0.35 0.015"/>
+    <geom name="table_leg_1" class="table" pos="0.47 -0.33 0.165" size="0.02 0.02 0.165"/>
+    <geom name="table_leg_2" class="table" pos="0.47 0.33 0.165" size="0.02 0.02 0.165"/>
+    <geom name="table_leg_3" class="table" pos="0.83 -0.33 0.165" size="0.02 0.02 0.165"/>
+    <geom name="table_leg_4" class="table" pos="0.83 0.33 0.165" size="0.02 0.02 0.165"/>
+  </worldbody>
+  <!-- Fixed task. start: wrist 15 cm above the tabletop, facing down.
+       goal: wrist 17 cm above the floor, 15 cm in under the near edge, facing +x. -->
+  <keyframe>
+    <key name="start" qpos="0.0013 0.5976 3.1440 -1.0582 -0.0014 -1.4858 1.5723"/>
+    <key name="goal" qpos="-0.7022 1.7147 1.3399 1.6699 2.8378 1.0170 0.4392"/>
+  </keyframe>
+</mujoco>

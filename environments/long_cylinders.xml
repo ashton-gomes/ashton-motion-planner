@@ -1,0 +1,33 @@
+<!-- Long cylinders: three 1 m tall posts stand 0.45 m from the base, on the arc
+     the wrist would sweep from home to a goal off to the side. The posts are too tall
+     to reach over, so the arm must pull in, rotate past the first post, then reach out
+     through the 20 cm gap between the first two posts. -->
+<mujoco model="Long cylinders">
+  <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
+  <compiler meshdir="../mujoco_menagerie/kinova_gen3/assets"/>
+  <asset>
+    <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="flat" mark="edge"
+             rgb1="0.5 0.5 0.5" markrgb="0.32 0.32 0.32" width="128" height="128"/>
+    <material name="floor" texture="grid" texrepeat="20 20" reflectance="0"/>
+  </asset>
+  <default>
+    <default class="post">
+      <geom type="cylinder" size="0.035 0.50"/>
+    </default>
+  </default>
+  <worldbody>
+    <light pos="0 -1 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.002" material="floor"/>
+    <!-- Posts at 0.45 m radius and -25, -60, and -95 degrees around the base. -->
+    <geom name="post_1" class="post" pos="0.408 -0.190 0.50" rgba="1 0.8 0 1"/>
+    <geom name="post_2" class="post" pos="0.225 -0.390 0.50" rgba="1 0.5 0 1"/>
+    <geom name="post_3" class="post" pos="-0.039 -0.448 0.50" rgba="1 0.2 0 1"/>
+  </worldbody>
+  <!-- Fixed task. start: the robot's home pose, wrist facing +x.
+       goal: wrist 0.60 m out at -42.5 degrees, past the gap between post_1 and post_2. -->
+  <keyframe>
+    <key name="start" qpos="0 0.26179939 3.14159265 -2.26892803 0 0.95993109 1.57079633"/>
+    <key name="goal" qpos="0.5215 0.6891 -2.7886 -1.6523 0.0803 0.7535 1.3008"/>
+  </keyframe>
+</mujoco>

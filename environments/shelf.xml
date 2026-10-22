@@ -1,0 +1,38 @@
+<!-- Shelf: the goal is deep inside the middle cubby of a bookshelf on the
+     robot's left (+y). The cubby is open only toward the robot, and the boards
+     leave a few centimetres around the wrist, so after swinging around from the
+     opposite side the arm must line up with the opening and reach straight in. -->
+<mujoco model="Shelf cubby">
+  <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
+  <compiler meshdir="../mujoco_menagerie/kinova_gen3/assets"/>
+  <asset>
+    <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="flat" mark="edge"
+             rgb1="0.5 0.5 0.5" markrgb="0.32 0.32 0.32" width="128" height="128"/>
+    <material name="floor" texture="grid" texrepeat="20 20" reflectance="0"/>
+  </asset>
+  <default>
+    <default class="board">
+      <geom type="box" rgba="0.75 0.6 0.4 1"/>
+    </default>
+  </default>
+  <worldbody>
+    <light pos="0 -1 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" pos="0 0 -0.002" material="floor"/>
+    <!-- Shelf unit: x = -0.25..0.75, front face at y = 0.45, back at y = 0.72.
+         Middle cubby interior: x = 0.10..0.40, z = 0.30..0.55. -->
+    <geom name="shelf_back" class="board" pos="0.25 0.71 0.45" size="0.50 0.01 0.45"/>
+    <geom name="shelf_bottom" class="board" pos="0.25 0.58 0.29" size="0.50 0.13 0.01"/>
+    <geom name="shelf_top" class="board" pos="0.25 0.58 0.56" size="0.50 0.13 0.01"/>
+    <geom name="shelf_divider_left" class="board" pos="0.09 0.58 0.45" size="0.01 0.13 0.45"/>
+    <geom name="shelf_divider_right" class="board" pos="0.41 0.58 0.45" size="0.01 0.13 0.45"/>
+    <geom name="shelf_side_left" class="board" pos="-0.25 0.58 0.45" size="0.01 0.13 0.45"/>
+    <geom name="shelf_side_right" class="board" pos="0.75 0.58 0.45" size="0.01 0.13 0.45"/>
+  </worldbody>
+  <!-- Fixed task. start: wrist on the opposite (-y) side, facing away from the shelf.
+       goal: wrist 15 cm inside the middle cubby, facing +y (into the shelf). -->
+  <keyframe>
+    <key name="start" qpos="0.5880 0.7431 -2.4286 -1.6985 -0.6456 0.6460 1.5473"/>
+    <key name="goal" qpos="-0.6757 0.9254 2.2841 -1.3578 0.6277 0.3952 1.7195"/>
+  </keyframe>
+</mujoco>

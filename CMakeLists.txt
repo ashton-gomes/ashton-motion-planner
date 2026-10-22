@@ -28,7 +28,7 @@ if(BUILD_VIEWER)
     target_link_libraries(testing PRIVATE planner_core glfw)
     target_compile_definitions(testing PRIVATE
         ROBOT_XML_PATH="${KINOVA_MODEL_PATH}"
-        SCENE_XML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments/scene.xml")
+        SCENE_XML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments/wall_hole.xml")
 endif()
 
 include(CTest)

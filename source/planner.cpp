@@ -13,6 +13,7 @@
 #include <chrono>
 #include <array>
 #include <limits>
+#include <optional>
 #ifndef ROBOT_XML_PATH
 #define ROBOT_XML_PATH "/home/ash_gomes/gplanner/mujoco_menagerie/kinova_gen3/gen3_obstacle.xml"
 #endif
@@ -743,6 +744,7 @@ struct MotionPlanner::Impl {
     SelfCollisionChecker self;
     ObstacleCollisionChecker scene;
     std::vector<SceneObstacle> obstacles;
+    std::optional<Pose> fixed_goal;
     static constexpr double tolerance = 1e-3;
     static constexpr double beta = 0.1;
 
@@ -752,6 +754,27 @@ struct MotionPlanner::Impl {
           scene(scene_xml, options.obstacle_clearance),
           obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance)) {
         validateRRTSettings(settings);
+        loadSceneTask(scene_xml);
+    }
+
+    // Optional fixed task from the scene: "start" replaces the robot's home
+    // configuration and "goal" fixes the target. Both must be collision-free.
+    void loadSceneTask(const std::string& scene_xml) {
+        const auto joints = [&](const char* name) -> std::optional<Eigen::Matrix<double, n, 1>> {
+            const auto qpos = loadSceneKeyframe(scene_xml, name);
+            if (!qpos) return std::nullopt;
+            if (qpos->size() != n) throw std::runtime_error(
+                std::string("Scene keyframe '") + name + "' must have seven joint values.");
+            const Eigen::Matrix<double, n, 1> q = *qpos;
+            if (self.hasSelfCollision(q) || scene.hasObstacleCollision(q)) throw std::runtime_error(
+                std::string("Scene keyframe '") + name + "' is in collision: " + scene_xml);
+            return q;
+        };
+        if (const auto start = joints("start")) {
+            robot.home_qpos = *start;
+            robot.home_pose = FK(robot, *start);
+        }
+        if (const auto goal = joints("goal")) fixed_goal = FK(robot, *goal);
     }
 
     bool collisionFree(const Eigen::VectorXd& from, const Eigen::VectorXd& to) {
@@ -884,6 +907,7 @@ MotionPlanner::MotionPlanner(const std::string& robot_xml, const std::string& sc
     : impl_(std::make_unique<Impl>(robot_xml, scene_xml, settings)) {}
 MotionPlanner::~MotionPlanner() = default;
 const Pose& MotionPlanner::homePose() const { return impl_->robot.home_pose; }
+const std::optional<Pose>& MotionPlanner::sceneGoal() const { return impl_->fixed_goal; }
 
 Pose MotionPlanner::sampleGoal() {
     auto& p = *impl_;

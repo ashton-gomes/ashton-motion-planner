@@ -20,9 +20,13 @@ struct Condition {
 const std::vector<Condition> conditions = {
     {"direct_empty", "empty.xml", PlannerMode::DirectScLERP},
     {"sampled_empty", "empty.xml", PlannerMode::SampledScLERP},
-    {"sampled_obstacles_1", "obstacles_1.xml", PlannerMode::SampledScLERP},
-    {"sampled_obstacles_2", "obstacles_2.xml", PlannerMode::SampledScLERP},
-    {"sampled_obstacles_3", "obstacles_3.xml", PlannerMode::SampledScLERP},
+    {"sampled_random_cylinders", "random_cylinders.xml", PlannerMode::SampledScLERP},
+    // Fixed-task scenes: every trial uses the scene's start and goal; only the
+    // planner's random sampling changes between trials.
+    {"sampled_wall_hole", "wall_hole.xml", PlannerMode::SampledScLERP},
+    {"sampled_long_cylinders", "long_cylinders.xml", PlannerMode::SampledScLERP},
+    {"sampled_under_table", "under_table.xml", PlannerMode::SampledScLERP},
+    {"sampled_shelf", "shelf.xml", PlannerMode::SampledScLERP},
 };
 
 struct Options {
@@ -49,10 +53,11 @@ Options parseOptions(int argc, char** argv) {
         const std::string key = argv[i];
         if (key == "--help") {
             std::cout << "Usage: benchmark [--trials 1000] [--seed 1] [--output benchmark-results]\n"
-                         "                 [--condition all|direct_empty|sampled_empty|sampled_obstacles_1|\n"
-                         "                              sampled_obstacles_2|sampled_obstacles_3]\n"
+                         "                 [--condition all|direct_empty|sampled_empty|sampled_random_cylinders|\n"
+                         "                              sampled_wall_hole|sampled_long_cylinders|\n"
+                         "                              sampled_under_table|sampled_shelf]\n"
                          "                 [--max-expansions 1000] [--validation-checks 240]\n"
-                         "Runs N trials per selected condition; all = 5N trials. Existing CSVs are preserved.\n";
+                         "Runs N trials per selected condition; all = 7N trials. Existing CSVs are preserved.\n";
             std::exit(0);
         }
         if (i + 1 == argc) throw std::invalid_argument("Missing value for " + key);
@@ -148,7 +153,7 @@ int main(int argc, char** argv) {
                 PlanResult result;
                 PathValidation validation;
                 try {
-                    goal = planner.sampleGoal();
+                    goal = planner.sceneGoal() ? *planner.sceneGoal() : planner.sampleGoal();
                     goal_sampled = true;
                     result = planner.plan(goal, condition.mode);
                     validation = planner.validatePath(result, goal, options.validation_checks);

@@ -7,8 +7,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent
 BINARY = ROOT.parent / 'build' / 'benchmark'
-CONDITIONS = ['direct_empty', 'sampled_empty', 'sampled_obstacles_1',
-              'sampled_obstacles_2', 'sampled_obstacles_3']
+CONDITIONS = ['direct_empty', 'sampled_empty', 'sampled_random_cylinders',
+              'sampled_wall_hole', 'sampled_long_cylinders', 'sampled_under_table',
+              'sampled_shelf']
 TRIALS = 1000
 BATCH = 100
 WORKERS = 8

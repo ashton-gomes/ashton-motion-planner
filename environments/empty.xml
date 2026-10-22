@@ -1,6 +1,6 @@
 <mujoco model="Empty obstacle environment">
   <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
-  <compiler meshdir="/home/ash_gomes/gplanner/mujoco_menagerie/kinova_gen3/assets"/>
+  <compiler meshdir="../mujoco_menagerie/kinova_gen3/assets"/>
   <asset>
     <texture name="background" type="skybox" builtin="flat" rgb1="0.45 0.45 0.45" width="512" height="3072"/>
     <texture name="grid" type="2d" builtin="flat" mark="edge"
