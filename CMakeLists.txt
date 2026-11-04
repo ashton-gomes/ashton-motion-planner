@@ -23,11 +23,14 @@ target_compile_definitions(benchmark PRIVATE
 option(BUILD_VIEWER "Build the interactive planner and GLFW viewer" ON)
 if(BUILD_VIEWER)
     find_package(glfw3 REQUIRED)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
     add_executable(testing source/main.cpp source/environment_selector.cpp
                            source/planner_debug.cpp source/viewer.cpp)
-    target_link_libraries(testing PRIVATE planner_core glfw)
+    target_link_libraries(testing PRIVATE planner_core glfw ${OpenCV_LIBS})
+    target_include_directories(testing PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_compile_definitions(testing PRIVATE
         ROBOT_XML_PATH="${KINOVA_MODEL_PATH}"
+        SAVED_TRIALS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/saved_trials"
         SCENE_XML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments/wall_hole.xml")
 endif()
 

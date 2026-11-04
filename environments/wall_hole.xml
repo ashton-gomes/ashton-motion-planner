@@ -28,7 +28,7 @@
   <!-- Fixed task. start: wrist off to the side, facing -y.
        goal: wrist 14 cm behind the wall, through the window, facing +x. -->
   <keyframe>
-    <key name="start" qpos="0.5880 0.7431 -2.4286 -1.6985 -0.6456 0.6460 1.5473"/>
+    <key name="start" qpos="0.2880 0.7431 -2.4286 -1.6985 -0.6456 0.6460 1.5473"/>
     <key name="goal" qpos="-0.2044 0.6986 3.1798 -1.3949 -0.3432 0.5442 1.8107"/>
   </keyframe>
 </mujoco>

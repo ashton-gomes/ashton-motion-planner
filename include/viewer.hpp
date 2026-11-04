@@ -14,10 +14,12 @@ public:
 
     // Load a scene and loop the joint trajectory with start/end coordinate frames.
     // Poses use [x, y, z, qw, qx, qy, qz]. Returns 1 if loading/opening fails.
+    // If video_path is set, the first pass of the trajectory is also saved there.
     static int play(const std::string& scene_path,
                     const std::vector<Eigen::VectorXd>& trajectory,
                     const Eigen::Matrix<double, 7, 1>& start,
-                    const Eigen::Matrix<double, 7, 1>& end);
+                    const Eigen::Matrix<double, 7, 1>& end,
+                    const std::string& video_path = "");
 
     // Check if the window is still open
     bool is_open() const;
@@ -25,8 +27,16 @@ public:
     // Set robot joint positions (qpos) directly from an Eigen vector
     void set_qpos(const Eigen::VectorXd& qpos);
 
-    // Render one frame and poll mouse/keyboard events
-    void render();
+    // Rendered pixels, bottom row first (OpenGL order).
+    struct Frame {
+        int width = 0;
+        int height = 0;
+        std::vector<unsigned char> rgb;
+    };
+
+    // Render one frame and poll mouse/keyboard events. If capture is given,
+    // the rendered image is copied into it.
+    void render(Frame* capture = nullptr);
 
     // Close the viewer window manually
     void close();

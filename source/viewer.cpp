@@ -1,13 +1,52 @@
 #include "viewer.hpp"
 #include "sampler.hpp"
 #include <Eigen/Geometry>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
 #include <cstdio>
 #include <memory>
+
+namespace {
+
+constexpr double kPlaybackFps = 60.0;
+
+// Play the trajectory once while writing every frame to an MP4 file.
+void recordTrajectory(MujocoViewer& viewer, const std::vector<Eigen::VectorXd>& trajectory,
+                      const std::string& video_path) {
+    MujocoViewer::Frame frame;
+    cv::VideoWriter writer;
+    cv::Mat bgr;
+    for (const auto& joints : trajectory) {
+        if (!viewer.is_open()) break;
+        viewer.set_qpos(joints);
+        viewer.render(&frame);
+        const cv::Mat rgb(frame.height, frame.width, CV_8UC3, frame.rgb.data());
+        cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
+        cv::flip(bgr, bgr, 0);  // OpenGL rows start at the bottom.
+        if (!writer.isOpened()) {
+            writer.open(video_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                        kPlaybackFps, bgr.size());
+            if (!writer.isOpened()) {
+                std::cerr << "Could not open video file: " << video_path << '\n';
+                return;
+            }
+        }
+        // The writer needs a fixed size, so match the first frame if the window is resized.
+        const cv::Size size(static_cast<int>(writer.get(cv::CAP_PROP_FRAME_WIDTH)),
+                            static_cast<int>(writer.get(cv::CAP_PROP_FRAME_HEIGHT)));
+        if (size.area() > 0 && bgr.size() != size) cv::resize(bgr, bgr, size);
+        writer.write(bgr);
+    }
+    if (writer.isOpened()) std::cout << "Saved trial video to " << video_path << '\n';
+}
+
+}  // namespace
 
 int MujocoViewer::play(const std::string& scene_path,
                        const std::vector<Eigen::VectorXd>& trajectory,
                        const Eigen::Matrix<double, 7, 1>& start,
-                       const Eigen::Matrix<double, 7, 1>& end) {
+                       const Eigen::Matrix<double, 7, 1>& end,
+                       const std::string& video_path) {
     if (trajectory.empty()) return 1;
     char error[1000]{};
     std::unique_ptr<mjModel, decltype(&mj_deleteModel)> model(
@@ -29,9 +68,10 @@ int MujocoViewer::play(const std::string& scene_path,
     MujocoViewer viewer(model.get(), data.get(), "ScLERP + RMRC | X: red, Y: green, Z: blue");
     if (!viewer.is_open()) return 1;
     viewer.pose_markers_ = {start, end};
+    if (!video_path.empty()) recordTrajectory(viewer, trajectory, video_path);
     const double start_time = glfwGetTime();
     while (viewer.is_open()) {
-        size_t frame = static_cast<size_t>((glfwGetTime() - start_time) * 60.0)
+        size_t frame = static_cast<size_t>((glfwGetTime() - start_time) * kPlaybackFps)
                        % trajectory.size();
         viewer.set_qpos(trajectory[frame]);
         viewer.render();
@@ -127,7 +167,7 @@ void MujocoViewer::set_qpos(const Eigen::VectorXd& qpos) {
     }
 }
 
-void MujocoViewer::render() {
+void MujocoViewer::render(Frame* capture) {
     if (!is_open()) return;
 
     // Run forward kinematics to update link Cartesian positions
@@ -148,6 +188,14 @@ void MujocoViewer::render() {
 
     // Render scene into OpenGL frame buffer
     mjr_render(viewport, &scn_, &con_);
+
+    // Read pixels before the swap, while the back buffer still holds this frame.
+    if (capture) {
+        capture->width = width;
+        capture->height = height;
+        capture->rgb.resize(static_cast<size_t>(width) * height * 3);
+        mjr_readPixels(capture->rgb.data(), nullptr, viewport, &con_);
+    }
 
     // Swap buffers and process UI events (mouse, keyboard)
     glfwSwapBuffers(window_);
