@@ -7,6 +7,7 @@
 #include <optional>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // Reset independent random streams and the shared cylinder-placement cache.
@@ -50,11 +51,12 @@ Eigen::Matrix<double, 7, 1> sampleReachablePose(
 // Randomization can be disabled with one toggle in source/sampler.cpp.
 void applyCylinderPlacements(mjModel* model);
 
-// Load static physical obstacles from a MuJoCo scene.  This project puts
-// robot collision meshes in group 3, so they and the floor plane are skipped.
+// Load static physical obstacles from a MuJoCo scene. Geoms on the robot's
+// bodies (named in robot_body_names) and the floor plane are skipped.
 std::vector<SceneObstacle> loadSceneObstacles(
     const std::string& scene_path,
-    double safety_clearance);
+    double safety_clearance,
+    const std::unordered_set<std::string>& robot_body_names);
 
 // Read a named keyframe's joint positions from a scene XML. Scenes may define
 // "start" and "goal" keyframes to fix a planning task; returns nullopt if absent.

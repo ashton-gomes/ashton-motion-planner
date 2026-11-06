@@ -23,6 +23,13 @@ To run the program, do
 ```
 From there, you can select the scenario to run.
 
+## Choosing the robot
+
+The robot arm is set in `robots::active()` in `source/robots.cpp` (Kinova Gen3
+by default; G1 left and right arms are also available). See
+[docs/modular_robots.md](docs/modular_robots.md) for how to switch robots or
+add a new one.
+
 ## Bash shortcuts
 
 From the repository root, load the G1 viewer shortcut:

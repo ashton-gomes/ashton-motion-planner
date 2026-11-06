@@ -50,7 +50,8 @@ int debugPlannerFailure(
     const std::vector<RRTNode>& tree,
     const std::string& scene_path,
     const Eigen::Matrix<double, 7, 1>& goal,
-    int frames_per_edge)
+    int frames_per_edge,
+    const std::function<Eigen::VectorXd(const Eigen::VectorXd&)>& to_scene_qpos)
 {
     std::cerr << "Planner failed: " << reason << '\n'
               << "Expansions attempted: " << stats.expansions
@@ -73,8 +74,9 @@ int debugPlannerFailure(
               << " m; rotation error: " << rotation.angularDistance(goal_rotation) << " rad.\n"
               << "Replaying the current tree; close the viewer to exit.\n";
 
-    if (MujocoViewer::play(scene_path, buildTreeDebugTrajectory(tree, frames_per_edge),
-                           tree.front().pose, goal) != 0) {
+    std::vector<Eigen::VectorXd> playback = buildTreeDebugTrajectory(tree, frames_per_edge);
+    for (auto& joints : playback) joints = to_scene_qpos(joints);
+    if (MujocoViewer::play(scene_path, playback, tree.front().pose, goal) != 0) {
         std::cerr << "Could not open the planner debug playback.\n";
     }
     return 1;

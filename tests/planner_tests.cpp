@@ -1,4 +1,5 @@
 #include "planner.hpp"
+#include "robots.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -17,7 +18,10 @@ void checkEnvironments() {
         if (entry.path().extension() != ".xml") continue;
         const std::string name = entry.path().filename().string();
         seedSampling(1, false);
-        MotionPlanner planner(ROBOT_XML_PATH, entry.path().string());
+        // Files named g1_*.xml include the G1; the others include the Kinova Gen3.
+        const bool g1 = name.rfind("g1_", 0) == 0;
+        MotionPlanner planner(g1 ? robots::g1RightArm() : robots::kinovaGen3(),
+                              entry.path().string());
         if (!planner.sceneGoal()) continue;
         const Pose& goal = *planner.sceneGoal();
         require((goal.head<3>() - planner.homePose().head<3>()).norm() > 0.1,
@@ -31,12 +35,38 @@ void checkEnvironments() {
     }
 }
 
+// Plan with one arm of the G1 humanoid while its legs, waist, and other arm
+// are held still, in the obstacle-free G1 environment.
+void checkG1Arms() {
+    const std::string scene = (std::filesystem::path(ENVIRONMENTS_PATH) / "g1_empty.xml").string();
+    for (const RobotConfig& robot : {robots::g1RightArm(), robots::g1LeftArm()}) {
+        seedSampling(1, false);
+        seedRRTSampling(1);
+        MotionPlanner planner(robot, scene);
+        require(planner.dof() == 7, robot.name + ": expected 7 planned joints.");
+        const auto home = planner.plan(planner.homePose(), PlannerMode::DirectScLERP);
+        require(home.success && planner.validatePath(home, planner.homePose()).valid,
+                robot.name + ": home must be collision-free and agree with MuJoCo FK.");
+        const Eigen::VectorXd scene_qpos = planner.toSceneQpos(home.trajectory.front());
+        require(scene_qpos.size() > planner.dof(),
+                robot.name + ": the scene pose must include the held joints.");
+        const Pose goal = planner.sampleGoal();
+        const auto result = planner.plan(goal, PlannerMode::SampledScLERP);
+        require(result.success, robot.name + ": a sampled goal must be reached, got '" +
+                result.failure_reason + "'.");
+        const auto checked = planner.validatePath(result, goal);
+        require(checked.collision_free && checked.position_error < 1e-3 && checked.rotation_error < 1e-3,
+                robot.name + ": the reached pose must agree with independent MuJoCo FK.");
+    }
+}
+
 int main() {
     try {
         checkEnvironments();
+        checkG1Arms();
         seedSampling(1, false);
         seedRRTSampling(1);
-        MotionPlanner planner(ROBOT_XML_PATH,
+        MotionPlanner planner(robots::kinovaGen3(),
             (std::filesystem::path(ENVIRONMENTS_PATH) / "empty.xml").string());
         for (auto mode : {PlannerMode::DirectScLERP, PlannerMode::SampledScLERP}) {
             const auto result = planner.plan(planner.homePose(), mode);
@@ -46,7 +76,7 @@ int main() {
         }
         // A valid endpoint must not hide a joint-limit violation in the path.
         auto invalid_path = planner.plan(planner.homePose(), PlannerMode::DirectScLERP);
-        invalid_path.trajectory.push_back(Eigen::VectorXd::Constant(7, 100.0));
+        invalid_path.trajectory.push_back(Eigen::VectorXd::Constant(planner.dof(), 100.0));
         invalid_path.trajectory.push_back(invalid_path.tree.front().qpos);
         const auto invalid_check = planner.validatePath(invalid_path, planner.homePose(), 24);
         require(!invalid_check.joint_limits_ok && !invalid_check.valid &&

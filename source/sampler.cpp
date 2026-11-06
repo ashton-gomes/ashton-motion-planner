@@ -148,7 +148,8 @@ Eigen::Matrix<double, 7, 1> sampleReachablePose(
 
 std::vector<SceneObstacle> loadSceneObstacles(
     const std::string& scene_path,
-    double safety_clearance)
+    double safety_clearance,
+    const std::unordered_set<std::string>& robot_body_names)
 {
     if (safety_clearance < 0.0) {
         throw std::invalid_argument("Obstacle safety clearance cannot be negative.");
@@ -169,7 +170,8 @@ std::vector<SceneObstacle> loadSceneObstacles(
     mj_forward(model, data);
     std::vector<SceneObstacle> obstacles;
     for (int geom = 0; geom < model->ngeom; ++geom) {
-        const bool robot_collision_mesh = model->geom_group[geom] == 3;
+        const char* body = mj_id2name(model, mjOBJ_BODY, model->geom_bodyid[geom]);
+        const bool robot_collision_mesh = body && robot_body_names.count(body) > 0;
         const bool floor_plane = model->geom_type[geom] == mjGEOM_PLANE;
         const bool physical = model->geom_contype[geom] != 0 &&
                               model->geom_conaffinity[geom] != 0;

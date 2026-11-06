@@ -10,6 +10,31 @@ namespace {
 
 constexpr double kPlaybackFps = 60.0;
 
+// Turn off shadows and floor reflections. Each one redraws the whole scene,
+// which is slow when WSL renders on the CPU (llvmpipe). Set to false for the
+// nicer look.
+constexpr bool kLightweightRendering = true;
+
+// Some models (like the Unitree G1) add a collision geom with the same mesh as
+// each visible geom, and both are drawn by default. Move those copies to
+// group 3, which the viewer hides, so each link is drawn once.
+void hideDuplicateCollisionMeshes(mjModel* model) {
+    const auto collides = [&](int geom) {
+        return model->geom_contype[geom] != 0 || model->geom_conaffinity[geom] != 0;
+    };
+    for (int geom = 0; geom < model->ngeom; ++geom) {
+        if (model->geom_type[geom] != mjGEOM_MESH || !collides(geom)) continue;
+        for (int other = 0; other < model->ngeom; ++other) {
+            if (other != geom && !collides(other) &&
+                model->geom_bodyid[other] == model->geom_bodyid[geom] &&
+                model->geom_dataid[other] == model->geom_dataid[geom]) {
+                model->geom_group[geom] = 3;
+                break;
+            }
+        }
+    }
+}
+
 // Play the trajectory once while writing every frame to an MP4 file.
 void recordTrajectory(MujocoViewer& viewer, const std::vector<Eigen::VectorXd>& trajectory,
                       const std::string& video_path) {
@@ -56,6 +81,7 @@ int MujocoViewer::play(const std::string& scene_path,
         return 1;
     }
     applyCylinderPlacements(model.get());
+    hideDuplicateCollisionMeshes(model.get());
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model.get()), mj_deleteData);
     if (!data) return 1;
     for (const auto& joints : trajectory) {
@@ -141,6 +167,10 @@ MujocoViewer::MujocoViewer(mjModel* model, mjData* data, const std::string& titl
     // Allocate scene geometry buffers (max 2000 geoms) and OpenGL context
     mjv_makeScene(m_, &scn_, 2000);
     mjr_makeContext(m_, &con_, mjFONTSCALE_150);
+    if (kLightweightRendering) {
+        scn_.flags[mjRND_SHADOW] = 0;
+        scn_.flags[mjRND_REFLECTION] = 0;
+    }
 
     // Set initial camera perspective
     cam_.type = mjCAMERA_FREE;

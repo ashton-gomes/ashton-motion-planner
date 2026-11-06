@@ -1,5 +1,6 @@
 #include "environment_selector.hpp"
 #include "planner.hpp"
+#include "robots.hpp"
 #include "viewer.hpp"
 
 #include <chrono>
@@ -26,7 +27,9 @@ int main() {
     try {
         const std::string scene = selectEnvironment(SCENE_XML_PATH, std::cin, std::cout);
         RRTStarSettings settings;
-        MotionPlanner planner(ROBOT_XML_PATH, scene, settings);
+        // To plan with another arm, change robots::active() in source/robots.cpp.
+        MotionPlanner planner(robots::active(), scene, settings);
+        std::cout << "Robot: " << planner.robot().name << " (" << planner.dof() << " joints).\n";
         const bool fixed_goal = planner.sceneGoal().has_value();
         const Pose goal = fixed_goal ? *planner.sceneGoal() : planner.sampleGoal();
         std::cout << (fixed_goal ? "Using the scene's fixed goal.\n" : "Using a random goal.\n");
@@ -34,12 +37,16 @@ int main() {
         const auto result = planner.plan(goal, PlannerMode::SampledScLERP);
         if (!result.success) {
             return debugPlannerFailure(result.failure_reason, result.stats, result.tree,
-                                       scene, goal, settings.animation_frames_per_edge);
+                                       scene, goal, settings.animation_frames_per_edge,
+                                       [&](const Eigen::VectorXd& joints) {
+                                           return planner.toSceneQpos(joints);
+                                       });
         }
         std::cout << "Goal reached with " << result.tree.size() << " nodes in "
                   << result.planning_seconds << " s.\n";
         const std::string video_path = kSaveTrialVideo ? trialVideoPath(scene) : "";
-        return MujocoViewer::play(scene, result.trajectory, planner.homePose(), goal, video_path);
+        return MujocoViewer::play(scene, planner.toSceneTrajectory(result.trajectory),
+                                  planner.homePose(), goal, video_path);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

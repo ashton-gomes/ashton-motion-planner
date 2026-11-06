@@ -1,0 +1,8 @@
+<!-- Empty environment for the Unitree G1 (robots::g1RightArm / g1LeftArm).
+     The G1 model brings its own floor, light, and sky, so only the include and
+     the mesh folder are needed here. The G1 stands at its default pose with
+     the pelvis at 0.793 m; legs, waist, and the other arm are held still. -->
+<mujoco model="G1 empty environment">
+  <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>
+  <compiler meshdir="../unitree_ros/robots/g1_description/meshes"/>
+</mujoco>

@@ -1,4 +1,5 @@
 #include "planner.hpp"
+#include "robots.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -108,9 +109,12 @@ int main(int argc, char** argv) {
         summary << std::setprecision(10);
         RRTStarSettings settings;
         settings.max_expansions = options.max_expansions;
+        // To benchmark another arm, change robots::active() in source/robots.cpp.
+        const RobotConfig robot = robots::active();
         metadata << "setting,value\ntrials_per_condition," << options.trials
                  << "\nfirst_seed," << options.seed << "\ncondition," << options.condition
-                 << "\nrobot_xml," << csv(ROBOT_XML_PATH)
+                 << "\nrobot," << csv(robot.name)
+                 << "\nrobot_xml," << csv(robot.model_path)
                  << "\nenvironments_directory," << csv(ENVIRONMENTS_PATH)
                  << "\nuse_rrt_star," << settings.use_rrt_star
                  << "\nuse_goal_bias," << settings.use_goal_bias
@@ -141,7 +145,7 @@ int main(int argc, char** argv) {
             // is reset before sampling the goal. Empty-space tasks are paired.
             seedSampling(options.seed, false);
             seedRRTSampling(options.seed);
-            MotionPlanner planner(ROBOT_XML_PATH,
+            MotionPlanner planner(robot,
                 (std::filesystem::path(ENVIRONMENTS_PATH) / condition.scene).string(), settings);
             Summary totals;
             for (int trial = 0; trial < options.trials; ++trial) {

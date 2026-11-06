@@ -13,16 +13,18 @@
 #include <chrono>
 #include <array>
 #include <limits>
+#include <map>
+#include <memory>
 #include <optional>
-#ifndef ROBOT_XML_PATH
-#define ROBOT_XML_PATH "/home/ash_gomes/gplanner/mujoco_menagerie/kinova_gen3/gen3_obstacle.xml"
-#endif
-
-
+#include <string>
+#include <unordered_set>
 
 namespace {
 
-const int n = 7;                  // DoF for robot arm, take fom URDF later
+// Joint-space vectors have one entry per planned joint; the count comes from
+// the RobotConfig, so any number of hinge joints works.
+using JointVector = Eigen::VectorXd;
+using SpatialJacobian = Eigen::Matrix<double, 6, Eigen::Dynamic>;
 
 // General helpers (Quaternions and Dual Quaternions)
 
@@ -287,18 +289,28 @@ struct ScrewJoint {
 };
 
 struct RobotModel {
+    // Planned joints, base to tool, and the end-effector body.
+    std::vector<std::string> joint_names;
+    std::string tool_body;
+    // Every body of the robot; scene geoms on these bodies belong to the robot.
+    std::unordered_set<std::string> body_names;
+    // qpos values of the joints that are not planned (held still), by name.
+    std::map<std::string, std::vector<double>> held_joint_values;
+
     std::vector<ScrewJoint> joints;
     DQ M_dq; // Tool pose dual quaternion at theta = 0
-    Eigen::Matrix<double, n, 1> home_qpos;
+    JointVector home_qpos;
     Eigen::Matrix<double, 7, 1> home_pose;
-    Eigen::Matrix<double, n, 1> joint_lower_limits;
-    std::array<bool, n> joint_limited{};
-    Eigen::Matrix<double, n, 1> joint_upper_limits;
+    JointVector joint_lower_limits;
+    std::vector<bool> joint_limited;
+    JointVector joint_upper_limits;
 
     // Approximate Cartesian sampling workspace, centered at the base joint.
     Eigen::Vector3d workspace_center = Eigen::Vector3d::Zero();
     double workspace_outer_radius = 0.0;
     double workspace_inner_radius = 0.0;
+
+    int dof() const { return static_cast<int>(joints.size()); }
 };
 
 
@@ -356,11 +368,12 @@ DQ exp_twist(const ScrewJoint& joint, double theta) {
 
 // Making spatial jacobian:
 
-Eigen::Matrix<double, 6, n> spatialJacobian(
+SpatialJacobian spatialJacobian(
     const RobotModel& robot,
-    const Eigen::Matrix<double, n, 1>& theta)
+    const JointVector& theta)
 {
-    Eigen::Matrix<double, 6, n> J;
+    const int n = robot.dof();
+    SpatialJacobian J(6, n);
 
     // DQ's default members give the identity: real = (1,0,0,0), dual = (0,0,0,0).
     DQ T{};
@@ -407,13 +420,13 @@ Eigen::Matrix<double, 6, n> spatialJacobian(
 
 // psuedoinverse:
 
-Eigen::Matrix<double, n, 6> pseudoInverse(
-    const Eigen::Matrix<double, 6, n>& J)
+Eigen::Matrix<double, Eigen::Dynamic, 6> pseudoInverse(
+    const SpatialJacobian& J)
 {
     Eigen::Matrix<double, 6, 6> JJt =
         J * J.transpose();
 
-    Eigen::Matrix<double, n, 6> J_pinv =
+    Eigen::Matrix<double, Eigen::Dynamic, 6> J_pinv =
         J.transpose() *
         (JJt + 1e-6 * Eigen::Matrix<double, 6, 6>::Identity())
             .ldlt().solve(Eigen::Matrix<double, 6, 6>::Identity());
@@ -424,13 +437,13 @@ Eigen::Matrix<double, n, 6> pseudoInverse(
 
 // B from paper:
 
-Eigen::Matrix<double, n, 7> getB(
+Eigen::Matrix<double, Eigen::Dynamic, 7> getB(
     const RobotModel& robot,
-    const Eigen::Matrix<double, n, 1>& theta,
+    const JointVector& theta,
     const Eigen::Matrix<double, 7, 1>& pose)
 {
     // Manipulator spatial Jacobian
-    Eigen::Matrix<double, 6, n> Js =
+    SpatialJacobian Js =
         spatialJacobian(robot, theta);
 
 
@@ -440,12 +453,12 @@ Eigen::Matrix<double, n, 7> getB(
 
 
     // Pseudoinverse
-    Eigen::Matrix<double, n, 6> Js_pinv =
+    Eigen::Matrix<double, Eigen::Dynamic, 6> Js_pinv =
         pseudoInverse(Js);
 
 
     // B = Js+ * J2
-    Eigen::Matrix<double, n, 7> B =
+    Eigen::Matrix<double, Eigen::Dynamic, 7> B =
         Js_pinv * J2;
 
 
@@ -454,14 +467,14 @@ Eigen::Matrix<double, n, 7> getB(
 
 // RMRC:
 
-Eigen::Matrix<double, n, 1> RMRC(
+JointVector RMRC(
     const RobotModel& robot,
-    const Eigen::Matrix<double, n, 1>& theta_current,
+    const JointVector& theta_current,
     const Eigen::Matrix<double, 7, 1>& pose_current,
     const Eigen::Matrix<double, 7, 1>& pose_next,
     double beta)
 {
-    Eigen::Matrix<double, n, 7> B =
+    Eigen::Matrix<double, Eigen::Dynamic, 7> B =
         getB(
             robot,
             theta_current,
@@ -475,7 +488,7 @@ Eigen::Matrix<double, n, 1> RMRC(
     Eigen::Matrix<double, 7, 1> pose_change = aligned_next - pose_current;
 
 
-    Eigen::Matrix<double, n, 1> theta_next =
+    JointVector theta_next =
         theta_current
         + beta * B * pose_change;
 
@@ -484,54 +497,178 @@ Eigen::Matrix<double, n, 1> RMRC(
 }
 
 
-// Extracting URDF:
+// Loading the robot from its MuJoCo model:
 
-RobotModel extractURDF(const std::string& xml_path) {
-    char error[500];
-    mjModel* m = mj_loadXML(xml_path.c_str(), nullptr, error, sizeof(error));
-    if (!m) {
-        throw std::runtime_error(std::string("Robot model load error: ") + error);
-    }
-    mjData* d = mj_makeData(m);
-    if (!d) {
-        mj_deleteModel(m);
-        throw std::runtime_error("Could not create robot kinematics data.");
+using ModelPtr = std::unique_ptr<mjModel, decltype(&mj_deleteModel)>;
+using DataPtr = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
+
+ModelPtr loadModel(const std::string& path, const std::string& what) {
+    char error[1000]{};
+    ModelPtr model(mj_loadXML(path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
+    if (!model) throw std::runtime_error(what + " load error (" + path + "): " + error);
+    return model;
+}
+
+DataPtr makeData(const mjModel* model, const std::string& what) {
+    DataPtr data(mj_makeData(model), mj_deleteData);
+    if (!data) throw std::runtime_error("Could not create " + what + " data.");
+    return data;
+}
+
+std::string nameOf(const mjModel* m, mjtObj type, int id) {
+    const char* name = mj_id2name(m, type, id);
+    return name ? name : "";
+}
+
+// Number of qpos values one joint uses.
+int qposWidth(int joint_type) {
+    if (joint_type == mjJNT_FREE) return 7;
+    if (joint_type == mjJNT_BALL) return 4;
+    return 1;
+}
+
+// True if `body` is `ancestor` or sits below it in the body tree.
+bool isAncestorOrSelf(const mjModel* m, int ancestor, int body) {
+    for (; body > 0; body = m->body_parentid[body])
+        if (body == ancestor) return true;
+    return ancestor == 0;
+}
+
+// World pose [x, y, z, qw, qx, qy, qz] of one body after mj_kinematics.
+Pose bodyPose(const mjData* d, int body) {
+    Pose pose;
+    pose << Eigen::Map<const Eigen::Vector3d>(&d->xpos[3 * body]),
+            d->xquat[4 * body], d->xquat[4 * body + 1],
+            d->xquat[4 * body + 2], d->xquat[4 * body + 3];
+    return pose;
+}
+
+// Where the planned joints sit inside one loaded MuJoCo model (the robot on
+// its own, or a scene that includes it). All other joints keep held_qpos.
+struct ChainBinding {
+    std::vector<int> qpos_address; // qpos index of each planned joint
+    Eigen::VectorXd held_qpos;     // full qpos used for the joints not planned
+
+    void write(const JointVector& joints, mjData* data) const {
+        if (joints.size() != static_cast<int>(qpos_address.size()))
+            throw std::invalid_argument("Joint vector size does not match the planned joints.");
+        std::copy(held_qpos.data(), held_qpos.data() + held_qpos.size(), data->qpos);
+        for (size_t i = 0; i < qpos_address.size(); ++i)
+            data->qpos[qpos_address[i]] = joints[static_cast<int>(i)];
     }
 
-    // 1. Set all joints to zero and evaluate static geometry ONLY
-    mju_zero(d->qpos, m->nq);
-    mj_kinematics(m, d); // Computes Cartesian positions without physics
+    Eigen::VectorXd fullQpos(const JointVector& joints) const {
+        if (joints.size() != static_cast<int>(qpos_address.size()))
+            throw std::invalid_argument("Joint vector size does not match the planned joints.");
+        Eigen::VectorXd qpos = held_qpos;
+        for (size_t i = 0; i < qpos_address.size(); ++i)
+            qpos[qpos_address[i]] = joints[static_cast<int>(i)];
+        return qpos;
+    }
+
+    JointVector extract(const Eigen::VectorXd& qpos) const {
+        JointVector joints(static_cast<int>(qpos_address.size()));
+        for (size_t i = 0; i < qpos_address.size(); ++i)
+            joints[static_cast<int>(i)] = qpos[qpos_address[i]];
+        return joints;
+    }
+};
+
+// Joints are matched by name, so the same robot works on its own model and in
+// any scene that includes that model.
+ChainBinding bindChain(const mjModel* m, const RobotModel& robot,
+                       const std::string& model_label) {
+    ChainBinding binding;
+    binding.held_qpos = Eigen::Map<const Eigen::VectorXd>(m->qpos0, m->nq);
+    for (int j = 0; j < m->njnt; ++j) {
+        const auto held = robot.held_joint_values.find(nameOf(m, mjOBJ_JOINT, j));
+        if (held != robot.held_joint_values.end() &&
+            static_cast<int>(held->second.size()) == qposWidth(m->jnt_type[j])) {
+            std::copy(held->second.begin(), held->second.end(),
+                      binding.held_qpos.data() + m->jnt_qposadr[j]);
+        }
+    }
+    for (const std::string& name : robot.joint_names) {
+        const int joint = mj_name2id(m, mjOBJ_JOINT, name.c_str());
+        if (joint < 0)
+            throw std::runtime_error(model_label + " has no joint named '" + name + "'.");
+        binding.qpos_address.push_back(m->jnt_qposadr[joint]);
+    }
+    return binding;
+}
+
+RobotModel loadRobot(const RobotConfig& config) {
+    ModelPtr model = loadModel(config.model_path, "Robot model");
+    const mjModel* m = model.get();
+    DataPtr data = makeData(m, "robot kinematics");
+    mjData* d = data.get();
 
     RobotModel robot;
-    robot.joints.resize(m->njnt);
+    robot.tool_body = config.tool_body;
+    const int tool_id = mj_name2id(m, mjOBJ_BODY, config.tool_body.c_str());
+    if (tool_id < 0)
+        throw std::runtime_error("Robot model has no tool body named '" + config.tool_body + "'.");
 
-    if (m->nq != n || m->njnt != n) {
-        mj_deleteData(d);
-        mj_deleteModel(m);
-        throw std::runtime_error("Expected a seven-DoF robot model.");
+    // 1. Planned joints: the configured names, or every joint in the model.
+    robot.joint_names = config.joint_names;
+    if (robot.joint_names.empty())
+        for (int j = 0; j < m->njnt; ++j) robot.joint_names.push_back(nameOf(m, mjOBJ_JOINT, j));
+    if (robot.joint_names.empty())
+        throw std::runtime_error("Robot model has no joints to plan with.");
+    std::vector<int> ids;
+    for (const std::string& name : robot.joint_names) {
+        const int joint = mj_name2id(m, mjOBJ_JOINT, name.c_str());
+        if (joint < 0)
+            throw std::runtime_error("Robot model has no joint named '" + name + "'.");
+        if (m->jnt_type[joint] != mjJNT_HINGE)
+            throw std::runtime_error("Joint '" + name + "' is not a hinge; only revolute joints can be planned.");
+        if (!ids.empty() && !isAncestorOrSelf(m, m->jnt_bodyid[ids.back()], m->jnt_bodyid[joint]))
+            throw std::runtime_error("Joint '" + name + "' does not follow '" +
+                robot.joint_names[ids.size() - 1] + "' in one chain from base to tool.");
+        ids.push_back(joint);
     }
+    if (!isAncestorOrSelf(m, m->jnt_bodyid[ids.back()], tool_id))
+        throw std::runtime_error("Tool body '" + config.tool_body +
+                                 "' does not come after the last planned joint.");
+    const int n = static_cast<int>(ids.size());
 
-    // 2. Read the screw axis and anchor point for each joint
-    for (int i = 0; i < m->njnt; ++i) {
-        robot.joints[i].omega = Eigen::Map<Eigen::Vector3d>(&d->xaxis[3 * i]).normalized();
-        robot.joints[i].q     = Eigen::Map<Eigen::Vector3d>(&d->xanchor[3 * i]);
-        // One full turn suffices for the arm's continuous hinge joints.
-        const double pi = std::acos(-1.0);
-        robot.joint_limited[i] = m->jnt_limited[i];
-        robot.joint_lower_limits[i] = m->jnt_limited[i] ? m->jnt_range[2 * i] : -pi;
-        robot.joint_upper_limits[i] = m->jnt_limited[i] ? m->jnt_range[2 * i + 1] : pi;
+    // 2. Starting value of every joint: the keyframe if present, else the
+    // model defaults. Joints that are not planned stay at these values.
+    Eigen::VectorXd start_qpos = Eigen::Map<const Eigen::VectorXd>(m->qpos0, m->nq);
+    const int key = config.home_keyframe.empty()
+        ? -1 : mj_name2id(m, mjOBJ_KEY, config.home_keyframe.c_str());
+    if (key >= 0)
+        start_qpos = Eigen::Map<const Eigen::VectorXd>(&m->key_qpos[key * m->nq], m->nq);
+    for (int j = 0; j < m->njnt; ++j) {
+        const std::string name = nameOf(m, mjOBJ_JOINT, j);
+        if (name.empty()) continue;
+        const double* values = start_qpos.data() + m->jnt_qposadr[j];
+        robot.held_joint_values[name].assign(values, values + qposWidth(m->jnt_type[j]));
     }
+    for (int body = 1; body < m->nbody; ++body)
+        robot.body_names.insert(nameOf(m, mjOBJ_BODY, body));
+    const ChainBinding binding = bindChain(m, robot, "Robot model");
 
-    // 3. Read the tool frame pose (last body in the kinematic chain)
-    int tool_id = m->nbody - 1;
-    Eigen::Vector3d p_home = Eigen::Map<Eigen::Vector3d>(&d->xpos[3 * tool_id]);
-    // MuJoCo stores [w, x, y, z]; Eigen's pointer constructor expects [x, y, z, w].
-    const mjtNum* raw_quat = &d->xquat[4 * tool_id];
-    Eigen::Quaterniond q_home(raw_quat[0], raw_quat[1], raw_quat[2], raw_quat[3]);
-
-    Eigen::Matrix<double, 7, 1> home_pose;
-    home_pose << p_home, q_home.w(), q_home.x(), q_home.y(), q_home.z();
-    robot.M_dq = pose_to_dq(home_pose);
+    // 3. Read the screw axis and anchor point of each planned joint with the
+    // planned joints at zero. The tool pose here is M in the PoE formula.
+    binding.write(JointVector::Zero(n), d);
+    mj_kinematics(m, d); // Computes Cartesian positions without physics
+    robot.joints.resize(n);
+    robot.joint_limited.resize(n);
+    robot.joint_lower_limits.resize(n);
+    robot.joint_upper_limits.resize(n);
+    const double pi = std::acos(-1.0);
+    for (int i = 0; i < n; ++i) {
+        const int j = ids[i];
+        robot.joints[i].omega = Eigen::Map<Eigen::Vector3d>(&d->xaxis[3 * j]).normalized();
+        robot.joints[i].q     = Eigen::Map<Eigen::Vector3d>(&d->xanchor[3 * j]);
+        // One full turn suffices for continuous hinge joints.
+        robot.joint_limited[i] = m->jnt_limited[j];
+        robot.joint_lower_limits[i] = m->jnt_limited[j] ? m->jnt_range[2 * j] : -pi;
+        robot.joint_upper_limits[i] = m->jnt_limited[j] ? m->jnt_range[2 * j + 1] : pi;
+    }
+    const Pose zero_pose = bodyPose(d, tool_id);
+    robot.M_dq = pose_to_dq(zero_pose);
 
     // Approximate the arm reach from distances between joint anchors.  This is
     // a cheap sampling bound, not a guarantee that every sampled pose has IK.
@@ -541,35 +678,28 @@ RobotModel extractURDF(const std::string& xml_path) {
         total_link_length +=
             (robot.joints[i].q - robot.joints[i - 1].q).norm();
     }
-    total_link_length += (p_home - robot.joints.back().q).norm();
+    total_link_length += (zero_pose.head<3>() - robot.joints.back().q).norm();
 
     // Avoid full-extension singularities and reject points near the base.
     robot.workspace_outer_radius = 0.95 * total_link_length;
-    robot.workspace_inner_radius =
-        0.5 * (robot.joints[1].q - robot.joints[0].q).norm();
+    robot.workspace_inner_radius = n > 1
+        ? 0.5 * (robot.joints[1].q - robot.joints[0].q).norm() : 0.0;
 
-    // Use the model's named home keyframe rather than duplicating its joint
-    // positions in the planner.  Evaluate its tool pose with MuJoCo as well.
-    const int home_key_id = mj_name2id(m, mjOBJ_KEY, "home");
-    if (home_key_id < 0) {
-        mj_deleteData(d);
-        mj_deleteModel(m);
-        throw std::runtime_error("Model does not define a 'home' keyframe.");
+    // 4. Home configuration: from the config, else from the keyframe.
+    if (!config.home_joints.empty()) {
+        if (static_cast<int>(config.home_joints.size()) != n)
+            throw std::runtime_error("home_joints has " + std::to_string(config.home_joints.size()) +
+                                     " values but " + std::to_string(n) + " joints are planned.");
+        robot.home_qpos = Eigen::Map<const JointVector>(config.home_joints.data(), n);
+    } else if (key >= 0) {
+        robot.home_qpos = binding.extract(start_qpos);
+    } else {
+        throw std::runtime_error("Robot '" + config.name + "' needs home_joints or a '" +
+                                 config.home_keyframe + "' keyframe.");
     }
-    for (int i = 0; i < n; ++i)
-        robot.home_qpos[i] = m->key_qpos[home_key_id * m->nq + i];
-
-    std::copy(robot.home_qpos.data(), robot.home_qpos.data() + n, d->qpos);
+    binding.write(robot.home_qpos, d);
     mj_kinematics(m, d);
-    const Eigen::Vector3d p_initial = Eigen::Map<Eigen::Vector3d>(&d->xpos[3 * tool_id]);
-    const mjtNum* initial_quat = &d->xquat[4 * tool_id];
-    robot.home_pose << p_initial, initial_quat[0], initial_quat[1],
-                       initial_quat[2], initial_quat[3];
-
-    // 4. Discard MuJoCo completely
-    mj_deleteData(d);
-    mj_deleteModel(m);
-
+    robot.home_pose = bodyPose(d, tool_id);
     return robot;
 }
 
@@ -580,56 +710,60 @@ bool isInsideWorkspace(const RobotModel& robot,
            radius <= robot.workspace_outer_radius;
 }
 
-// Uses a second MuJoCo model only for collision queries.  ROBOT_XML_PATH
-// contains the arm alone, so any reported contact is a self-collision.
+// Uses the robot model on its own for collision queries, so any contact is a
+// self-collision.
 class SelfCollisionChecker {
 public:
-    explicit SelfCollisionChecker(const std::string& xml_path) {
-        char error[500]{};
-        model_ = mj_loadXML(xml_path.c_str(), nullptr, error, sizeof(error));
-        if (!model_) {
-            throw std::runtime_error(std::string("Collision model load error: ") + error);
+    SelfCollisionChecker(const std::string& xml_path, const RobotModel& robot)
+        : model_(loadModel(xml_path, "Collision model")),
+          data_(makeData(model_.get(), "collision-check")),
+          binding_(bindChain(model_.get(), robot, "Collision model")),
+          tool_(mj_name2id(model_.get(), mjOBJ_BODY, robot.tool_body.c_str())) {
+        if (tool_ < 0)
+            throw std::runtime_error("Collision model has no tool body named '" + robot.tool_body + "'.");
+        // Group each body by the last planned joint above it. Bodies in the
+        // same group never move relative to each other (for example a G1's
+        // legs and torso while one arm moves), so their contacts are ignored.
+        std::vector<int> planned_joint_body;
+        for (const std::string& name : robot.joint_names)
+            planned_joint_body.push_back(
+                model_->jnt_bodyid[mj_name2id(model_.get(), mjOBJ_JOINT, name.c_str())]);
+        rigid_group_.assign(model_->nbody, -1);
+        for (int body = 1; body < model_->nbody; ++body) {
+            rigid_group_[body] = rigid_group_[model_->body_parentid[body]];
+            for (size_t i = 0; i < planned_joint_body.size(); ++i)
+                if (planned_joint_body[i] == body) rigid_group_[body] = static_cast<int>(i);
         }
-        data_ = mj_makeData(model_);
-        if (!data_) {
-            mj_deleteModel(model_);
-            throw std::runtime_error("Could not create collision-check data.");
-        }
+        skipIgnoredPairs();
     }
 
-    ~SelfCollisionChecker() {
-        mj_deleteData(data_);
-        mj_deleteModel(model_);
+    Pose toolPose(const JointVector& joints) {
+        binding_.write(joints, data_.get());
+        mj_kinematics(model_.get(), data_.get());
+        return bodyPose(data_.get(), tool_);
     }
 
-    Pose toolPose(const Eigen::VectorXd& qpos) {
-        std::copy(qpos.data(), qpos.data() + n, data_->qpos);
-        mj_kinematics(model_, data_);
-        const int tool = mj_name2id(model_, mjOBJ_BODY, "bracelet_link");
-        if (tool < 0) throw std::runtime_error("Missing bracelet_link tool frame.");
-        Pose pose;
-        pose << Eigen::Map<Eigen::Vector3d>(&data_->xpos[3 * tool]),
-                data_->xquat[4 * tool], data_->xquat[4 * tool + 1],
-                data_->xquat[4 * tool + 2], data_->xquat[4 * tool + 3];
-        return pose;
-    }
-
-    bool hasSelfCollision(const Eigen::Matrix<double, n, 1>& qpos) {
-        std::copy(qpos.data(), qpos.data() + n, data_->qpos);
-        mj_forward(model_, data_);
+    bool hasSelfCollision(const JointVector& joints) {
+        binding_.write(joints, data_.get());
+        // Only link positions and contacts are needed, not the full physics step.
+        mj_kinematics(model_.get(), data_.get());
+        mj_collision(model_.get(), data_.get());
 
         for (int i = 0; i < data_->ncon; ++i) {
             const mjContact& contact = data_->contact[i];
             const int body1 = model_->geom_bodyid[contact.geom1];
             const int body2 = model_->geom_bodyid[contact.geom2];
 
+            // Geoms on the world body (such as a floor) are not robot links.
+            if (body1 == 0 || body2 == 0) continue;
+            // Links with no planned joint between them never move apart.
+            if (rigid_group_[body1] == rigid_group_[body2]) continue;
             // Collision meshes of links joined directly together overlap at
             // their joint.  Only non-neighboring link contacts are rejected.
-            const bool same_body = body1 == body2;
             const bool directly_connected =
                 model_->body_parentid[body1] == body2 ||
                 model_->body_parentid[body2] == body1;
-            if (!same_body && !directly_connected) {
+            if (!directly_connected) {
                 return true;
             }
         }
@@ -637,41 +771,76 @@ public:
     }
 
 private:
-    mjModel* model_ = nullptr;
-    mjData* data_ = nullptr;
+    // Speed-up: stop MuJoCo from computing contacts that hasSelfCollision
+    // ignores anyway (world geoms, and links in the same rigid group, such as
+    // a G1's legs against its pelvis). Each rigid group gets one collision
+    // bit and does not collide with its own bit. Only done when every
+    // collision geom uses MuJoCo's default masks (contype = conaffinity = 1),
+    // so pairs the model turned off on purpose stay off.
+    void skipIgnoredPairs() {
+        // Groups run from -1 (before the first planned joint) to dof - 1.
+        const int groups = *std::max_element(rigid_group_.begin(), rigid_group_.end()) + 2;
+        if (groups > 30) return;
+        for (int geom = 0; geom < model_->ngeom; ++geom) {
+            const int type = model_->geom_contype[geom], affinity = model_->geom_conaffinity[geom];
+            if ((type || affinity) && !(type == 1 && affinity == 1)) return;
+        }
+        const int all = (1 << groups) - 1;
+        for (int geom = 0; geom < model_->ngeom; ++geom) {
+            if (!model_->geom_contype[geom] && !model_->geom_conaffinity[geom]) continue;
+            const int body = model_->geom_bodyid[geom];
+            if (body == 0) {
+                model_->geom_contype[geom] = model_->geom_conaffinity[geom] = 0;
+                continue;
+            }
+            const int bit = 1 << (rigid_group_[body] + 1);
+            model_->geom_contype[geom] = bit;
+            model_->geom_conaffinity[geom] = all & ~bit;
+        }
+    }
+
+    ModelPtr model_;
+    DataPtr data_;
+    ChainBinding binding_;
+    int tool_ = -1;
+    std::vector<int> rigid_group_;
 };
 
-// Checks robot collision meshes (group 3) against non-plane physical geoms
-// from scene.xml.  The obstacle margin is enlarged for a conservative path.
+// Checks the robot's collision geoms against non-plane physical geoms from
+// scene.xml.  The obstacle margin is enlarged for a conservative path.
 class ObstacleCollisionChecker {
 public:
-    ObstacleCollisionChecker(const std::string& scene_path, double clearance) {
-        char error[500]{};
-        model_ = mj_loadXML(scene_path.c_str(), nullptr, error, sizeof(error));
-        if (!model_) {
-            throw std::runtime_error(std::string("Scene collision load error: ") + error);
-        }
-        applyCylinderPlacements(model_);
+    ObstacleCollisionChecker(const std::string& scene_path, const RobotModel& robot,
+                             double clearance)
+        : model_(loadModel(scene_path, "Scene collision")),
+          data_(nullptr, mj_deleteData) {
+        applyCylinderPlacements(model_.get());
+        binding_ = bindChain(model_.get(), robot, "Scene " + scene_path);
+        // A geom belongs to the robot if its body is one of the robot's bodies.
+        robot_geom_.resize(model_->ngeom);
+        obstacle_geom_.resize(model_->ngeom);
         for (int geom = 0; geom < model_->ngeom; ++geom) {
-            if (isObstacleGeom(geom)) {
+            const std::string body = nameOf(model_.get(), mjOBJ_BODY, model_->geom_bodyid[geom]);
+            robot_geom_[geom] = robot.body_names.count(body) > 0;
+        }
+        for (int geom = 0; geom < model_->ngeom; ++geom) {
+            obstacle_geom_[geom] = !robot_geom_[geom] &&
+                                   model_->geom_type[geom] != mjGEOM_PLANE &&
+                                   model_->geom_contype[geom] != 0 &&
+                                   model_->geom_conaffinity[geom] != 0;
+            if (obstacle_geom_[geom]) {
                 model_->geom_margin[geom] += clearance;
             }
         }
-        data_ = mj_makeData(model_);
-        if (!data_) {
-            mj_deleteModel(model_);
-            throw std::runtime_error("Could not create scene collision data.");
-        }
+        onlyRobotObstaclePairs();
+        data_ = makeData(model_.get(), "scene collision");
     }
 
-    ~ObstacleCollisionChecker() {
-        mj_deleteData(data_);
-        mj_deleteModel(model_);
-    }
-
-    bool hasObstacleCollision(const Eigen::Matrix<double, n, 1>& qpos) {
-        std::copy(qpos.data(), qpos.data() + n, data_->qpos);
-        mj_forward(model_, data_);
+    bool hasObstacleCollision(const JointVector& joints) {
+        binding_.write(joints, data_.get());
+        // Only link positions and contacts are needed, not the full physics step.
+        mj_kinematics(model_.get(), data_.get());
+        mj_collision(model_.get(), data_.get());
 
         for (int i = 0; i < data_->ncon; ++i) {
             const mjContact& contact = data_->contact[i];
@@ -683,33 +852,51 @@ public:
         return false;
     }
 
+    const ChainBinding& binding() const { return binding_; }
+
 private:
     bool isRobotCollisionGeom(int geom) const {
-        return model_->geom_group[geom] == 3;
+        return robot_geom_[geom];
     }
 
     bool isObstacleGeom(int geom) const {
-        return !isRobotCollisionGeom(geom) &&
-               model_->geom_type[geom] != mjGEOM_PLANE &&
-               model_->geom_contype[geom] != 0 &&
-               model_->geom_conaffinity[geom] != 0;
+        return obstacle_geom_[geom];
     }
 
-    mjModel* model_ = nullptr;
-    mjData* data_ = nullptr;
+    // Speed-up: only robot-vs-obstacle contacts are used here, so stop MuJoCo
+    // from computing robot-vs-robot, obstacle-vs-obstacle, and floor contacts.
+    // Robot geoms only accept obstacles, and obstacles accept nothing. Only
+    // done when every collision geom uses MuJoCo's default masks (1 and 1).
+    void onlyRobotObstaclePairs() {
+        for (int geom = 0; geom < model_->ngeom; ++geom) {
+            const int type = model_->geom_contype[geom], affinity = model_->geom_conaffinity[geom];
+            if ((type || affinity) && !(type == 1 && affinity == 1)) return;
+        }
+        for (int geom = 0; geom < model_->ngeom; ++geom) {
+            const bool physical = model_->geom_contype[geom] || model_->geom_conaffinity[geom];
+            model_->geom_contype[geom] = obstacle_geom_[geom] ? 1 : 0;
+            model_->geom_conaffinity[geom] = robot_geom_[geom] && physical ? 1 : 0;
+        }
+    }
+
+    ModelPtr model_;
+    DataPtr data_;
+    ChainBinding binding_;
+    std::vector<bool> robot_geom_;
+    std::vector<bool> obstacle_geom_; // decided once, before the masks change
 };
 
 // Check the simple joint-space motion used to replay and rewire tree edges.
 bool isJointPathCollisionFree(
-    const Eigen::Matrix<double, n, 1>& from,
-    const Eigen::Matrix<double, n, 1>& to,
+    const JointVector& from,
+    const JointVector& to,
     int checks,
     SelfCollisionChecker& self_collision_checker,
     ObstacleCollisionChecker& obstacle_collision_checker)
 {
     for (int i = 1; i <= checks; ++i) {
         const double t = static_cast<double>(i) / checks;
-        const Eigen::Matrix<double, n, 1> qpos = (1.0 - t) * from + t * to;
+        const JointVector qpos = (1.0 - t) * from + t * to;
         if (!qpos.allFinite() ||
             self_collision_checker.hasSelfCollision(qpos) ||
             obstacle_collision_checker.hasObstacleCollision(qpos)) {
@@ -721,11 +908,11 @@ bool isJointPathCollisionFree(
 
 
 // Forward Kinematics via Dual Quaternion PoE
-Eigen::Matrix<double, 7, 1> FK(const RobotModel& robot, const Eigen::Matrix<double, n, 1>& theta) {
+Eigen::Matrix<double, 7, 1> FK(const RobotModel& robot, const JointVector& theta) {
     DQ T_cumulative;
     // Default DQ is the identity transform
 
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < robot.dof(); ++i) {
         DQ exp_i = exp_twist(robot.joints[i], theta[i]);
         T_cumulative = dq_mult(T_cumulative, exp_i);
     }
@@ -739,6 +926,7 @@ Eigen::Matrix<double, 7, 1> FK(const RobotModel& robot, const Eigen::Matrix<doub
 } // namespace
 
 struct MotionPlanner::Impl {
+    RobotConfig config;
     RobotModel robot;
     RRTStarSettings settings;
     SelfCollisionChecker self;
@@ -748,11 +936,12 @@ struct MotionPlanner::Impl {
     static constexpr double tolerance = 1e-3;
     static constexpr double beta = 0.1;
 
-    Impl(const std::string& robot_xml, const std::string& scene_xml,
+    Impl(const RobotConfig& robot_config, const std::string& scene_xml,
          const RRTStarSettings& options)
-        : robot(extractURDF(robot_xml)), settings(options), self(robot_xml),
-          scene(scene_xml, options.obstacle_clearance),
-          obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance)) {
+        : config(robot_config), robot(loadRobot(robot_config)), settings(options),
+          self(robot_config.model_path, robot),
+          scene(scene_xml, robot, options.obstacle_clearance),
+          obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance, robot.body_names)) {
         validateRRTSettings(settings);
         loadSceneTask(scene_xml);
     }
@@ -760,12 +949,12 @@ struct MotionPlanner::Impl {
     // Optional fixed task from the scene: "start" replaces the robot's home
     // configuration and "goal" fixes the target. Both must be collision-free.
     void loadSceneTask(const std::string& scene_xml) {
-        const auto joints = [&](const char* name) -> std::optional<Eigen::Matrix<double, n, 1>> {
+        const auto joints = [&](const char* name) -> std::optional<JointVector> {
             const auto qpos = loadSceneKeyframe(scene_xml, name);
             if (!qpos) return std::nullopt;
-            if (qpos->size() != n) throw std::runtime_error(
-                std::string("Scene keyframe '") + name + "' must have seven joint values.");
-            const Eigen::Matrix<double, n, 1> q = *qpos;
+            if (qpos->size() != scene.binding().held_qpos.size()) throw std::runtime_error(
+                std::string("Scene keyframe '") + name + "' has the wrong number of values.");
+            const JointVector q = scene.binding().extract(*qpos);
             if (self.hasSelfCollision(q) || scene.hasObstacleCollision(q)) throw std::runtime_error(
                 std::string("Scene keyframe '") + name + "' is in collision: " + scene_xml);
             return q;
@@ -792,7 +981,7 @@ struct MotionPlanner::Impl {
                     PlannerDebugStats& stats,
                     std::vector<Eigen::VectorXd>* screw_trajectory = nullptr) {
         const DQ from = pose_to_dq(start.pose), to = pose_to_dq(end);
-        Eigen::Matrix<double, n, 1> joints = start.qpos;
+        JointVector joints = start.qpos;
         int steps = settings.sclerp_steps_per_edge;
         if (screw_trajectory) {
             // One continuous home-to-goal screw, with time resolution scaled to
@@ -807,7 +996,7 @@ struct MotionPlanner::Impl {
         for (int i = 1; i <= iterations; ++i) {
             const double progress = std::min(static_cast<double>(i) / steps, 1.0);
             const Pose desired = dq_to_pose(ScLERP(from, to, progress));
-            const Eigen::Matrix<double, n, 1> previous = joints;
+            const JointVector previous = joints;
             joints = RMRC(robot, joints, FK(robot, joints), desired, beta);
             if (!joints.allFinite()) { ++stats.non_finite; return false; }
             if (self.hasSelfCollision(joints)) { ++stats.self_collision; return false; }
@@ -902,10 +1091,24 @@ struct MotionPlanner::Impl {
     }
 };
 
-MotionPlanner::MotionPlanner(const std::string& robot_xml, const std::string& scene_xml,
+MotionPlanner::MotionPlanner(const RobotConfig& robot, const std::string& scene_xml,
                              const RRTStarSettings& settings)
-    : impl_(std::make_unique<Impl>(robot_xml, scene_xml, settings)) {}
+    : impl_(std::make_unique<Impl>(robot, scene_xml, settings)) {}
 MotionPlanner::~MotionPlanner() = default;
+const RobotConfig& MotionPlanner::robot() const { return impl_->config; }
+int MotionPlanner::dof() const { return impl_->robot.dof(); }
+
+Eigen::VectorXd MotionPlanner::toSceneQpos(const Eigen::VectorXd& joints) const {
+    return impl_->scene.binding().fullQpos(joints);
+}
+
+std::vector<Eigen::VectorXd> MotionPlanner::toSceneTrajectory(
+    const std::vector<Eigen::VectorXd>& trajectory) const {
+    std::vector<Eigen::VectorXd> scene_trajectory;
+    scene_trajectory.reserve(trajectory.size());
+    for (const auto& joints : trajectory) scene_trajectory.push_back(toSceneQpos(joints));
+    return scene_trajectory;
+}
 const Pose& MotionPlanner::homePose() const { return impl_->robot.home_pose; }
 const std::optional<Pose>& MotionPlanner::sceneGoal() const { return impl_->fixed_goal; }
 
@@ -982,7 +1185,7 @@ PathValidation MotionPlanner::validatePath(const PlanResult& result, const Pose&
             validation.joint_limits_ok = validation.collision_free = false;
             return;
         }
-        for (int joint = 0; joint < n; ++joint) {
+        for (int joint = 0; joint < p.robot.dof(); ++joint) {
             // Limits -pi..pi represent unrestricted continuous hinges in the
             // sampler. Only MuJoCo-limited joints constrain a planned path.
             // Read actual limited flags below through the robot XML metadata.

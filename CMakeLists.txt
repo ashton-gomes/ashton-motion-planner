@@ -7,17 +7,18 @@ find_package(Eigen3 REQUIRED)
 
 set(MUJOCO_ROOT "/home/ash_gomes/mujoco-install" CACHE PATH "MuJoCo installation")
 find_library(MUJOCO_LIB NAMES mujoco PATHS "${MUJOCO_ROOT}/lib" REQUIRED NO_DEFAULT_PATH)
-set(KINOVA_MODEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/mujoco_menagerie/kinova_gen3/gen3.xml")
-
-add_library(planner_core source/planner.cpp source/rrt_star.cpp source/sampler.cpp)
+# Robot models are listed in source/robots.cpp, relative to this directory.
+add_library(planner_core source/planner.cpp source/rrt_star.cpp source/sampler.cpp
+                         source/robots.cpp)
 target_include_directories(planner_core PUBLIC include "${MUJOCO_ROOT}/include")
 target_link_libraries(planner_core PUBLIC Eigen3::Eigen ${MUJOCO_LIB})
+target_compile_definitions(planner_core PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_CURRENT_SOURCE_DIR}")
 set(CMAKE_BUILD_RPATH "${MUJOCO_ROOT}/lib")
 
 add_executable(benchmark source/benchmark.cpp)
 target_link_libraries(benchmark PRIVATE planner_core)
 target_compile_definitions(benchmark PRIVATE
-    ROBOT_XML_PATH="${KINOVA_MODEL_PATH}"
     ENVIRONMENTS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments")
 
 option(BUILD_VIEWER "Build the interactive planner and GLFW viewer" ON)
@@ -29,7 +30,6 @@ if(BUILD_VIEWER)
     target_link_libraries(testing PRIVATE planner_core glfw ${OpenCV_LIBS})
     target_include_directories(testing PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_compile_definitions(testing PRIVATE
-        ROBOT_XML_PATH="${KINOVA_MODEL_PATH}"
         SAVED_TRIALS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/saved_trials"
         SCENE_XML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments/wall_hole.xml")
 endif()
@@ -39,7 +39,6 @@ if(BUILD_TESTING)
     add_executable(planner_tests tests/planner_tests.cpp)
     target_link_libraries(planner_tests PRIVATE planner_core)
     target_compile_definitions(planner_tests PRIVATE
-        ROBOT_XML_PATH="${KINOVA_MODEL_PATH}"
         ENVIRONMENTS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/environments")
     add_test(NAME planner_tests COMMAND planner_tests)
     find_package(Python3 COMPONENTS Interpreter QUIET)
