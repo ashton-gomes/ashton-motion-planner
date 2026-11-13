@@ -292,6 +292,8 @@ struct RobotModel {
     // Planned joints, base to tool, and the end-effector body.
     std::vector<std::string> joint_names;
     std::string tool_body;
+    // Visual meshes that also get a collision copy (RobotConfig).
+    std::vector<std::string> visual_collision_meshes;
     // Every body of the robot; scene geoms on these bodies belong to the robot.
     std::unordered_set<std::string> body_names;
     // qpos values of the joints that are not planned (held still), by name.
@@ -311,6 +313,15 @@ struct RobotModel {
     double workspace_inner_radius = 0.0;
 
     int dof() const { return static_cast<int>(joints.size()); }
+
+    // True if every limited planned joint is within its position limits.
+    bool withinJointLimits(const JointVector& theta, double slack = 1e-9) const {
+        for (int i = 0; i < dof(); ++i)
+            if (joint_limited[i] && (theta[i] < joint_lower_limits[i] - slack ||
+                                     theta[i] > joint_upper_limits[i] + slack))
+                return false;
+        return true;
+    }
 };
 
 
@@ -502,10 +513,44 @@ JointVector RMRC(
 using ModelPtr = std::unique_ptr<mjModel, decltype(&mj_deleteModel)>;
 using DataPtr = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
 
-ModelPtr loadModel(const std::string& path, const std::string& what) {
+// Loads a model. Every geom using one of visual_collision_meshes gets a
+// collision copy (same mesh, pose, and body; hidden in group 3), so parts the
+// model only draws, like the G1's hands, also count in collision checks.
+ModelPtr loadModel(const std::string& path, const std::string& what,
+                   const std::vector<std::string>& visual_collision_meshes = {}) {
     char error[1000]{};
-    ModelPtr model(mj_loadXML(path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
-    if (!model) throw std::runtime_error(what + " load error (" + path + "): " + error);
+    if (visual_collision_meshes.empty()) {
+        ModelPtr model(mj_loadXML(path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
+        if (!model) throw std::runtime_error(what + " load error (" + path + "): " + error);
+        return model;
+    }
+    std::unique_ptr<mjSpec, decltype(&mj_deleteSpec)> spec(
+        mj_parseXML(path.c_str(), nullptr, error, sizeof(error)), mj_deleteSpec);
+    if (!spec) throw std::runtime_error(what + " load error (" + path + "): " + error);
+
+    std::vector<mjsGeom*> visual_geoms;
+    for (mjsElement* element = mjs_firstElement(spec.get(), mjOBJ_GEOM); element;
+         element = mjs_nextElement(spec.get(), element)) {
+        mjsGeom* geom = mjs_asGeom(element);
+        const char* mesh = mjs_getString(geom->meshname);
+        if (geom->type == mjGEOM_MESH && mesh &&
+            std::find(visual_collision_meshes.begin(), visual_collision_meshes.end(), mesh) !=
+                visual_collision_meshes.end())
+            visual_geoms.push_back(geom);
+    }
+    for (mjsGeom* visual : visual_geoms) {
+        mjsGeom* copy = mjs_addGeom(mjs_getParent(visual->element), nullptr);
+        copy->type = mjGEOM_MESH;
+        mjs_setString(copy->meshname, mjs_getString(visual->meshname));
+        std::copy(visual->pos, visual->pos + 3, copy->pos);
+        std::copy(visual->quat, visual->quat + 4, copy->quat);
+        copy->contype = copy->conaffinity = 1;
+        copy->density = 0;  // collision only; leave the body's mass alone
+        copy->group = 3;
+    }
+    ModelPtr model(mj_compile(spec.get(), nullptr), mj_deleteModel);
+    if (!model)
+        throw std::runtime_error(what + " compile error (" + path + "): " + mjs_getError(spec.get()));
     return model;
 }
 
@@ -597,6 +642,40 @@ ChainBinding bindChain(const mjModel* m, const RobotModel& robot,
     return binding;
 }
 
+struct JointLimit {
+    bool limited = false;
+    double lower = 0.0, upper = 0.0;
+};
+
+// Position limits of the named joints, read from a URDF with MuJoCo's own
+// URDF parser. The spec is only parsed, not compiled, so meshes are not needed.
+std::vector<JointLimit> loadUrdfJointLimits(const std::string& urdf_path,
+                                            const std::vector<std::string>& joint_names) {
+    char error[1000]{};
+    std::unique_ptr<mjSpec, decltype(&mj_deleteSpec)> spec(
+        mj_parseXML(urdf_path.c_str(), nullptr, error, sizeof(error)), mj_deleteSpec);
+    if (!spec) throw std::runtime_error("URDF load error (" + urdf_path + "): " + error);
+    const double scale = spec->compiler.degree ? std::acos(-1.0) / 180.0 : 1.0;
+    std::vector<JointLimit> limits;
+    for (const std::string& name : joint_names) {
+        mjsElement* element = mjs_findElement(spec.get(), mjOBJ_JOINT, name.c_str());
+        if (!element)
+            throw std::runtime_error("URDF " + urdf_path + " has no joint named '" + name + "'.");
+        const mjsJoint* joint = mjs_asJoint(element);
+        JointLimit limit;
+        // Revolute joints come back as "auto": limited when a range is given.
+        // Continuous joints have no range and stay unlimited.
+        limit.limited = joint->limited == mjLIMITED_TRUE ||
+            (joint->limited == mjLIMITED_AUTO && joint->range[0] < joint->range[1]);
+        limit.lower = scale * joint->range[0];
+        limit.upper = scale * joint->range[1];
+        if (limit.limited && !(limit.lower < limit.upper))
+            throw std::runtime_error("URDF joint '" + name + "' has an empty limit range.");
+        limits.push_back(limit);
+    }
+    return limits;
+}
+
 RobotModel loadRobot(const RobotConfig& config) {
     ModelPtr model = loadModel(config.model_path, "Robot model");
     const mjModel* m = model.get();
@@ -605,6 +684,7 @@ RobotModel loadRobot(const RobotConfig& config) {
 
     RobotModel robot;
     robot.tool_body = config.tool_body;
+    robot.visual_collision_meshes = config.visual_collision_meshes;
     const int tool_id = mj_name2id(m, mjOBJ_BODY, config.tool_body.c_str());
     if (tool_id < 0)
         throw std::runtime_error("Robot model has no tool body named '" + config.tool_body + "'.");
@@ -645,6 +725,15 @@ RobotModel loadRobot(const RobotConfig& config) {
         const double* values = start_qpos.data() + m->jnt_qposadr[j];
         robot.held_joint_values[name].assign(values, values + qposWidth(m->jnt_type[j]));
     }
+    for (const auto& [name, value] : config.held_joints) {
+        const int joint = mj_name2id(m, mjOBJ_JOINT, name.c_str());
+        if (joint < 0 || qposWidth(m->jnt_type[joint]) != 1)
+            throw std::runtime_error("held_joints: '" + name + "' is not a hinge or slide joint in the model.");
+        if (std::find(robot.joint_names.begin(), robot.joint_names.end(), name) != robot.joint_names.end())
+            throw std::runtime_error("held_joints: '" + name + "' is a planned joint; use home_joints.");
+        robot.held_joint_values[name] = {value};
+        start_qpos[m->jnt_qposadr[joint]] = value;
+    }
     for (int body = 1; body < m->nbody; ++body)
         robot.body_names.insert(nameOf(m, mjOBJ_BODY, body));
     const ChainBinding binding = bindChain(m, robot, "Robot model");
@@ -658,14 +747,22 @@ RobotModel loadRobot(const RobotConfig& config) {
     robot.joint_lower_limits.resize(n);
     robot.joint_upper_limits.resize(n);
     const double pi = std::acos(-1.0);
+    // Position limits: from the URDF if one is given, else from the model.
+    std::vector<JointLimit> limits;
+    if (!config.urdf_path.empty()) {
+        limits = loadUrdfJointLimits(config.urdf_path, robot.joint_names);
+    } else {
+        for (int j : ids)
+            limits.push_back({m->jnt_limited[j] != 0, m->jnt_range[2 * j], m->jnt_range[2 * j + 1]});
+    }
     for (int i = 0; i < n; ++i) {
         const int j = ids[i];
         robot.joints[i].omega = Eigen::Map<Eigen::Vector3d>(&d->xaxis[3 * j]).normalized();
         robot.joints[i].q     = Eigen::Map<Eigen::Vector3d>(&d->xanchor[3 * j]);
         // One full turn suffices for continuous hinge joints.
-        robot.joint_limited[i] = m->jnt_limited[j];
-        robot.joint_lower_limits[i] = m->jnt_limited[j] ? m->jnt_range[2 * j] : -pi;
-        robot.joint_upper_limits[i] = m->jnt_limited[j] ? m->jnt_range[2 * j + 1] : pi;
+        robot.joint_limited[i] = limits[i].limited;
+        robot.joint_lower_limits[i] = limits[i].limited ? limits[i].lower : -pi;
+        robot.joint_upper_limits[i] = limits[i].limited ? limits[i].upper : pi;
     }
     const Pose zero_pose = bodyPose(d, tool_id);
     robot.M_dq = pose_to_dq(zero_pose);
@@ -697,6 +794,9 @@ RobotModel loadRobot(const RobotConfig& config) {
         throw std::runtime_error("Robot '" + config.name + "' needs home_joints or a '" +
                                  config.home_keyframe + "' keyframe.");
     }
+    if (!robot.withinJointLimits(robot.home_qpos))
+        throw std::runtime_error("Robot '" + config.name +
+                                 "' home configuration is outside the joint limits.");
     binding.write(robot.home_qpos, d);
     mj_kinematics(m, d);
     robot.home_pose = bodyPose(d, tool_id);
@@ -715,7 +815,7 @@ bool isInsideWorkspace(const RobotModel& robot,
 class SelfCollisionChecker {
 public:
     SelfCollisionChecker(const std::string& xml_path, const RobotModel& robot)
-        : model_(loadModel(xml_path, "Collision model")),
+        : model_(loadModel(xml_path, "Collision model", robot.visual_collision_meshes)),
           data_(makeData(model_.get(), "collision-check")),
           binding_(bindChain(model_.get(), robot, "Collision model")),
           tool_(mj_name2id(model_.get(), mjOBJ_BODY, robot.tool_body.c_str())) {
@@ -812,7 +912,7 @@ class ObstacleCollisionChecker {
 public:
     ObstacleCollisionChecker(const std::string& scene_path, const RobotModel& robot,
                              double clearance)
-        : model_(loadModel(scene_path, "Scene collision")),
+        : model_(loadModel(scene_path, "Scene collision", robot.visual_collision_meshes)),
           data_(nullptr, mj_deleteData) {
         applyCylinderPlacements(model_.get());
         binding_ = bindChain(model_.get(), robot, "Scene " + scene_path);
@@ -955,6 +1055,8 @@ struct MotionPlanner::Impl {
             if (qpos->size() != scene.binding().held_qpos.size()) throw std::runtime_error(
                 std::string("Scene keyframe '") + name + "' has the wrong number of values.");
             const JointVector q = scene.binding().extract(*qpos);
+            if (!robot.withinJointLimits(q)) throw std::runtime_error(
+                std::string("Scene keyframe '") + name + "' is outside the joint limits: " + scene_xml);
             if (self.hasSelfCollision(q) || scene.hasObstacleCollision(q)) throw std::runtime_error(
                 std::string("Scene keyframe '") + name + "' is in collision: " + scene_xml);
             return q;
@@ -999,6 +1101,9 @@ struct MotionPlanner::Impl {
             const JointVector previous = joints;
             joints = RMRC(robot, joints, FK(robot, joints), desired, beta);
             if (!joints.allFinite()) { ++stats.non_finite; return false; }
+            // Tree edges replay as straight lines in joint space, which stay
+            // inside the limit box when both ends do.
+            if (!robot.withinJointLimits(joints)) { ++stats.joint_limit; return false; }
             if (self.hasSelfCollision(joints)) { ++stats.self_collision; return false; }
             if (scene.hasObstacleCollision(joints)) { ++stats.obstacle_collision; return false; }
             if (screw_trajectory) {
@@ -1185,15 +1290,9 @@ PathValidation MotionPlanner::validatePath(const PlanResult& result, const Pose&
             validation.joint_limits_ok = validation.collision_free = false;
             return;
         }
-        for (int joint = 0; joint < p.robot.dof(); ++joint) {
-            // Limits -pi..pi represent unrestricted continuous hinges in the
-            // sampler. Only MuJoCo-limited joints constrain a planned path.
-            // Read actual limited flags below through the robot XML metadata.
-            if (p.robot.joint_limited[joint] &&
-                (joints[joint] < p.robot.joint_lower_limits[joint] - 1e-9 ||
-                 joints[joint] > p.robot.joint_upper_limits[joint] + 1e-9))
-                validation.joint_limits_ok = false;
-        }
+        // Limits -pi..pi represent unrestricted continuous hinges in the
+        // sampler. Only limited joints (URDF or model) constrain a path.
+        if (!p.robot.withinJointLimits(joints)) validation.joint_limits_ok = false;
         if (p.self.hasSelfCollision(joints) || p.scene.hasObstacleCollision(joints))
             validation.collision_free = false;
     };

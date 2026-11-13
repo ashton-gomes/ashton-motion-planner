@@ -1,0 +1,29 @@
+<!-- Hole in the wall (G1 right arm): the goal is behind a wall and only
+     reachable through a window in front of the right shoulder. The start
+     is off to the side, so a straight-line motion hits the wall. The planner has
+     to line the hand up with the window, then reach through. -->
+<mujoco model="G1 wall with a hole">
+  <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>
+  <compiler meshdir="../unitree_ros/robots/g1_description/meshes"/>
+  <default>
+    <default class="wall">
+      <geom type="box" rgba="0.55 0.65 0.8 0.6"/>
+    </default>
+  </default>
+  <worldbody>
+    <!-- Wall plane at x = 0.26 m (4 cm thick), y = -0.70..0.50, z = 0..1.50.
+         Window: y = -0.29..-0.09, z = 0.90..1.10 (20 cm square, room for the hand). -->
+    <geom name="wall_bottom" class="wall" pos="0.26 -0.10 0.45" size="0.02 0.60 0.45"/>
+    <geom name="wall_top" class="wall" pos="0.26 -0.10 1.30" size="0.02 0.60 0.20"/>
+    <geom name="wall_left" class="wall" pos="0.26 -0.495 1.00" size="0.02 0.205 0.10"/>
+    <geom name="wall_right" class="wall" pos="0.26 0.205 1.00" size="0.02 0.295 0.10"/>
+  </worldbody>
+  <!-- Fixed task for the right arm. Each keyframe is the full G1 pose:
+       floating base (7), legs and waist (15), left arm (7, hanging at the side), right arm (7).
+       start: hand off to the side, pointing -y.
+       goal: wrist at the window, hand through it behind the wall, pointing +x. -->
+  <keyframe>
+    <key name="start" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -0.0058 -0.3005 -1.1640 0.0046 0.5243 0.0714 -0.4948"/>
+    <key name="goal" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -0.5112 -0.4921 0.1687 0.0050 -0.1550 0.4952 0.0289"/>
+  </keyframe>
+</mujoco>

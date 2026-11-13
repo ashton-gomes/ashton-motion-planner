@@ -1,0 +1,20 @@
+<!-- Random cylinders (G1 right arm): three posts in front of the right shoulder
+     with a random goal. The interactive app moves the posts randomly on every
+     run (see the g1 layout in source/sampler.cpp); the benchmark uses the
+     positions written here. -->
+<mujoco model="G1 random cylinders">
+  <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>
+  <compiler meshdir="../unitree_ros/robots/g1_description/meshes"/>
+  <default>
+    <default class="obstacle">
+      <geom type="cylinder" size="0.03 0.25" contype="1" conaffinity="1"/>
+    </default>
+  </default>
+  <worldbody>
+    <!-- Fixed fallback positions, used when cylinder randomization is off.
+         Each post spans z = 0.75..1.25. -->
+    <geom name="g1_obs_cylinder_1" class="obstacle" pos="0.30 -0.30 1.00" rgba="1 1 0 1"/>
+    <geom name="g1_obs_cylinder_2" class="obstacle" pos="0.34 -0.15 1.00" rgba="1 0.5 0 1"/>
+    <geom name="g1_obs_cylinder_3" class="obstacle" pos="0.28 -0.02 1.00" rgba="1 0 0 1"/>
+  </worldbody>
+</mujoco>

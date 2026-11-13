@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,11 @@ struct RobotConfig {
     // MuJoCo model of the robot on its own (MJCF .xml, or a .urdf that
     // MuJoCo can load). It is also used for self-collision checks.
     std::string model_path;
+
+    // Optional URDF of the same robot. If set, the planned joints' position
+    // limits are read from its <limit lower upper> tags (continuous joints are
+    // unlimited) instead of from model_path. Every planned joint must be in it.
+    std::string urdf_path;
 
     // Body whose frame is the end effector, i.e. the pose being planned.
     std::string tool_body;
@@ -30,4 +36,20 @@ struct RobotConfig {
     // Optional keyframe in the model. If present, it also sets the values of
     // the joints that are held still; otherwise the model's default pose is used.
     std::string home_keyframe = "home";
+
+    // Positions (radians) for joints that are held still, by joint name. These
+    // override the keyframe or default pose, e.g. to tuck in a humanoid's
+    // other arm so it stays out of the way.
+    std::map<std::string, double> held_joints;
+
+    // Meshes that the model only shows (no collision shape) but that should
+    // block motion too. The planner adds a collision copy of each when it
+    // loads the model. The G1's hands need this: without it, the planner
+    // lets them pass through obstacles.
+    std::vector<std::string> visual_collision_meshes;
+
+    // Environment files made for this robot are named <prefix><scene>.xml,
+    // e.g. "g1_" + "wall_hole.xml". The benchmark and the default scene in
+    // `testing` use this to pick this robot's version of each scene.
+    std::string environment_prefix;
 };

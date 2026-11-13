@@ -11,8 +11,8 @@ void seedRRTSampling(std::uint32_t seed);
 // Shared RRT/RRT* settings. Disable use_rrt_star for plain RRT.
 struct RRTStarSettings {
     bool use_rrt_star = false;        // Cheapest-parent selection and rewiring.
-    bool use_goal_bias = false;      // Enable the original probabilistic sampling.
-    double goal_bias = 0.30;          // Goal probability when use_goal_bias is true.
+    bool use_goal_bias = true;      // Enable the original probabilistic sampling.
+    double goal_bias = 0.10;          // Goal probability when use_goal_bias is true.
     int samples_per_expansion = 10;   // Random fallback attempts or biased samples.
     double maximum_step = 0.05;       // Maximum Cartesian edge length, in metres.
     double rewire_radius = 0.10;       // Radius used to choose parents and rewire.

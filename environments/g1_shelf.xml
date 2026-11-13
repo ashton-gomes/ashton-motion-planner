@@ -1,0 +1,34 @@
+<!-- Shelf (G1 right arm): the goal is inside the middle cubby of a wall-mounted
+     shelf in front of the robot. The cubby is open only toward the robot, and
+     the boards leave a few centimetres around the hand. The start has the hand
+     pointing down in front of the chest, left of the cubby, so the arm must
+     turn the hand, line up with the opening, and reach straight in. -->
+<mujoco model="G1 shelf cubby">
+  <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>
+  <compiler meshdir="../unitree_ros/robots/g1_description/meshes"/>
+  <default>
+    <default class="board">
+      <geom type="box" rgba="0.75 0.6 0.4 1"/>
+    </default>
+  </default>
+  <worldbody>
+    <!-- Shelf unit: front face at x = 0.22, back at x = 0.48,
+         y = -0.52..0.32, z = 0.80..1.30.
+         Middle cubby interior: y = -0.30..-0.10, z = 0.88..1.08 (20 cm square). -->
+    <geom name="shelf_back" class="board" pos="0.48 -0.10 1.05" size="0.01 0.42 0.25"/>
+    <geom name="shelf_bottom" class="board" pos="0.35 -0.10 0.87" size="0.13 0.42 0.01"/>
+    <geom name="shelf_top" class="board" pos="0.35 -0.10 1.09" size="0.13 0.42 0.01"/>
+    <geom name="shelf_divider_left" class="board" pos="0.35 -0.09 1.05" size="0.13 0.01 0.25"/>
+    <geom name="shelf_divider_right" class="board" pos="0.35 -0.31 1.05" size="0.13 0.01 0.25"/>
+    <geom name="shelf_side_left" class="board" pos="0.35 0.32 1.05" size="0.13 0.01 0.25"/>
+    <geom name="shelf_side_right" class="board" pos="0.35 -0.52 1.05" size="0.13 0.01 0.25"/>
+  </worldbody>
+  <!-- Fixed task for the right arm. Each keyframe is the full G1 pose:
+       floating base (7), legs and waist (15), left arm (7, hanging at the side), right arm (7).
+       start: hand in front of the chest, left of the cubby, pointing down.
+       goal: wrist at the cubby opening, hand inside the cubby, pointing +x (into the shelf). -->
+  <keyframe>
+    <key name="start" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -0.9583 -0.3876 1.5557 -0.4250 -0.6630 -0.1183 1.4910"/>
+    <key name="goal" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -0.3186 -0.4682 0.0896 -0.1388 -0.1586 0.4505 0.0426"/>
+  </keyframe>
+</mujoco>

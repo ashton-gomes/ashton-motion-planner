@@ -11,7 +11,7 @@
 #include <sstream>
 
 // Set to true to save each successful motion plan as an MP4 in saved_trials/.
-constexpr bool kSaveTrialVideo = true;
+constexpr bool kSaveTrialVideo = false;
 
 // Build a path like saved_trials/wall_hole_2026-10-26_19-30-05.mp4.
 std::string trialVideoPath(const std::string& scene) {
@@ -25,10 +25,15 @@ std::string trialVideoPath(const std::string& scene) {
 
 int main() {
     try {
-        const std::string scene = selectEnvironment(SCENE_XML_PATH, std::cin, std::cout);
-        RRTStarSettings settings;
         // To plan with another arm, change robots::active() in source/robots.cpp.
-        MotionPlanner planner(robots::active(), scene, settings);
+        const RobotConfig robot = robots::active();
+        // Default to this robot's version of the scene, e.g. g1_wall_hole.xml.
+        const std::filesystem::path default_scene(SCENE_XML_PATH);
+        const std::string scene = selectEnvironment(
+            (default_scene.parent_path() / (robot.environment_prefix +
+                default_scene.filename().string())).string(), std::cin, std::cout);
+        RRTStarSettings settings;
+        MotionPlanner planner(robot, scene, settings);
         std::cout << "Robot: " << planner.robot().name << " (" << planner.dof() << " joints).\n";
         const bool fixed_goal = planner.sceneGoal().has_value();
         const Pose goal = fixed_goal ? *planner.sceneGoal() : planner.sampleGoal();

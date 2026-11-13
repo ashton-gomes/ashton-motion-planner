@@ -1,3 +1,5 @@
 build/
 MUJOCO_LOG.TXT
 saved_trials/
+benchmark-results/
+legacy/

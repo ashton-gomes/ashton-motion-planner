@@ -1,0 +1,30 @@
+<!-- Under the table (G1 right arm): the goal is beneath a chest-high tabletop
+     directly below the start. The straight-line motion goes through the
+     tabletop, so the arm has to come back past the near edge, drop down, and
+     reach in under it. The table is chest-high because the G1's arm is short:
+     the hand (about 17 cm past the wrist) must fit both above and below it. -->
+<mujoco model="G1 under the table">
+  <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>
+  <compiler meshdir="../unitree_ros/robots/g1_description/meshes"/>
+  <default>
+    <default class="table">
+      <geom type="box" rgba="0.6 0.4 0.25 1"/>
+    </default>
+  </default>
+  <worldbody>
+    <!-- Tabletop: x = 0.17..0.57, y = -0.45..0.40, z = 0.97..1.00. Legs at the corners. -->
+    <geom name="table_top" class="table" pos="0.37 -0.025 0.985" size="0.20 0.425 0.015"/>
+    <geom name="table_leg_1" class="table" pos="0.19 -0.43 0.485" size="0.02 0.02 0.485"/>
+    <geom name="table_leg_2" class="table" pos="0.19 0.38 0.485" size="0.02 0.02 0.485"/>
+    <geom name="table_leg_3" class="table" pos="0.55 -0.43 0.485" size="0.02 0.02 0.485"/>
+    <geom name="table_leg_4" class="table" pos="0.55 0.38 0.485" size="0.02 0.02 0.485"/>
+  </worldbody>
+  <!-- Fixed task for the right arm. Each keyframe is the full G1 pose:
+       floating base (7), legs and waist (15), left arm (7, hanging at the side), right arm (7).
+       start: hand above the tabletop, pointing down.
+       goal: wrist under the near edge, hand under the tabletop, pointing +x. -->
+  <keyframe>
+    <key name="start" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -1.9458 -1.3001 1.7453 0.1079 0.4264 0.0900 1.6144"/>
+    <key name="goal" qpos="0 0 0.793 1 0 0 0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0  0 0.3 0 1.5 0 0 0  -0.0945 -0.2524 0.0224 0.3777 -0.1027 -0.2794 -0.0536"/>
+  </keyframe>
+</mujoco>

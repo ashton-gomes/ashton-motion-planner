@@ -12,9 +12,9 @@ Robots included:
 | `robots::g1RightArm()` | `unitree_ros/robots/g1_description/g1_29dof.xml` | 7 right-arm joints | `right_wrist_yaw_link` |
 | `robots::g1LeftArm()` | `unitree_ros/robots/g1_description/g1_29dof.xml` | 7 left-arm joints | `left_wrist_yaw_link` |
 
-The environment files have not changed yet. They still include the Kinova
-model, so the `testing` viewer and `benchmark` should keep using the Kinova
-until G1 versions of the environments exist.
+Every environment has a G1 version (`environments/g1_*.xml`, laid out for the
+right arm). `testing` and `benchmark` pick the selected robot's versions
+automatically through `environment_prefix` (see below).
 
 ---
 
@@ -58,6 +58,9 @@ The `RobotConfig` fields ([include/robot_config.hpp](../include/robot_config.hpp
 | `joint_names` | Hinge joints to plan with, base to tool | every joint in the model is used |
 | `home_joints` | Start angles, one per planned joint (radians) | read from the `home_keyframe` |
 | `home_keyframe` | Keyframe name, default `"home"` | joints not planned use the model's default pose |
+| `held_joints` | Positions for joints that are not planned, by name (e.g. let a humanoid's other arm hang at its side) | keyframe or default pose |
+| `visual_collision_meshes` | Meshes the model only draws but that should block motion too; the planner adds a collision copy of each when loading (the G1's hands) | only the model's own collision shapes |
+| `environment_prefix` | Prefix of this robot's environment files, e.g. `"g1_"` → `g1_wall_hole.xml` | the plain (Kinova) files |
 
 The planner reads everything else from the model file: joint axes, joint
 positions, joint limits, and arm length (for the sampling workspace). Joint
@@ -191,11 +194,47 @@ replay (`debugPlannerFailure`) use them. For the Kinova, the two are the same.
   for the Kinova.
 - Not checked: the interactive `testing` viewer window (needs a display).
 
-## Still to do (environments)
+## G1 environments
 
-To run the G1 in the viewer and benchmark, each environment needs a G1 version:
+Each Kinova scene has a G1 version with the same idea, scaled to the G1's
+right arm (shoulder at about x = 0, y = -0.10, z = 1.085 m; the wrist reaches
+about 0.37 m from it; the hand reaches another 13-17 cm past the wrist). The
+left arm hangs at the side (`held_joints`), because in the G1's default pose
+both forearms point straight forward.
 
-- `<include>` the G1 model and set `meshdir` to `unitree_ros/robots/g1_description/meshes`.
-- Move obstacles to the G1's reach (shoulder about 1.1 m high, shoulder to wrist about 0.4 m).
-- Rewrite the `start`/`goal` keyframes for the G1 scene's full joint list
-  (36 values: 7 floating base + 29 joints). Only the planned arm's values are used.
+**The G1's hands have no collision shape in the Unitree model** (only a visible
+mesh). Without `visual_collision_meshes`, the planner let the hands pass through
+obstacles by up to 9 cm. The G1 presets list both hand meshes there, so the
+planner checks them like any other link.
+
+| Scene | Task |
+|---|---|
+| `g1_empty.xml` | No obstacles, random goal |
+| `g1_random_cylinders.xml` | Three posts in front of the right shoulder, random goal. Posts named `g1_obs_cylinder_*` move randomly on each interactive run (G1 layout in `source/sampler.cpp`) |
+| `g1_wall_hole.xml` | Reach through a 20 cm window in a wall 0.24 m in front |
+| `g1_long_cylinders.xml` | Reach out between two of three tall posts on an arc around the right shoulder |
+| `g1_under_table.xml` | From above a chest-high table to under its near edge (chest-high so the hand fits above and below it within reach) |
+| `g1_shelf.xml` | From in front of the chest, hand pointing down, into a 20 cm cubby of a shelf in front |
+
+The G1 files include `unitree_ros/robots/g1_description/g1_29dof.xml`, which
+brings its own floor and lights. Keyframes hold the full G1 pose (36 values:
+floating base 7, legs and waist 15, left arm 7, right arm 7). Only the planned
+arm's 7 values are used.
+
+In each fixed-task scene, the start and goal are collision-free and the
+straight-line motion is blocked by an obstacle (`planner_tests` checks this
+for every scene). Each planned path was also replayed with every *visible*
+robot mesh made solid: no frame in any G1 scene showed the robot overlapping
+an obstacle.
+
+Benchmark (`benchmark --trials 20`, which allows 1000 expansions per plan; the
+`testing` app allows 2000):
+
+| Scene | G1 goal reached | G1 path validated | Kinova goal reached |
+|---|---|---|---|
+| empty (sampled) | 90% | 60% | 100% |
+| random cylinders | 90% | 60% | 95% |
+| wall hole | 100% | 45% | 95% |
+| long cylinders | 40% (80% with 2000 expansions) | 5% | 70% |
+| under table | 20% (65% with 2000 expansions) | 0% | 80% |
+| shelf | 100% | 70% | 100% |

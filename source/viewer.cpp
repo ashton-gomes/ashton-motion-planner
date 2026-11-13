@@ -3,8 +3,13 @@
 #include <Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
+#include <unordered_map>
 
 namespace {
 
@@ -14,6 +19,75 @@ constexpr double kPlaybackFps = 60.0;
 // which is slow when WSL renders on the CPU (llvmpipe). Set to false for the
 // nicer look.
 constexpr bool kLightweightRendering = true;
+
+// Draw meshes with fewer triangles: nearby vertices are merged on a grid with
+// this many cells along each mesh's longest side. Display only; the planner's
+// collision checks use their own full-detail model. 48 removes about 70% of the
+// G1's triangles with little visible change. Set to 0 for full detail.
+constexpr int kDisplayMeshDetail = 48;
+
+// Under WSL, Mesa renders on the CPU (llvmpipe) unless told to use the GPU
+// through Direct3D 12. If true, the viewer asks for the GPU when WSL's D3D12
+// library is present. An existing GALLIUM_DRIVER setting is left alone.
+constexpr bool kUseWslGpu = true;
+
+void useWslGpuIfAvailable() {
+    if (kUseWslGpu && std::filesystem::exists("/usr/lib/wsl/lib/libd3d12.so"))
+        setenv("GALLIUM_DRIVER", "d3d12", 0);
+}
+
+// Merge vertices that fall in the same grid cell and drop triangles that
+// collapse. Triangles are rewritten in place, so only the face count shrinks.
+void simplifyMeshesForDisplay(mjModel* model, int cells) {
+    if (cells <= 0) return;
+    for (int mesh = 0; mesh < model->nmesh; ++mesh) {
+        const int vertex_count = model->mesh_vertnum[mesh];
+        const int face_count = model->mesh_facenum[mesh];
+        const float* vertices = model->mesh_vert + 3 * model->mesh_vertadr[mesh];
+        Eigen::Vector3f low = Eigen::Vector3f::Constant(INFINITY);
+        Eigen::Vector3f high = Eigen::Vector3f::Constant(-INFINITY);
+        for (int i = 0; i < vertex_count; ++i) {
+            const Eigen::Map<const Eigen::Vector3f> vertex(vertices + 3 * i);
+            low = low.cwiseMin(vertex);
+            high = high.cwiseMax(vertex);
+        }
+        const float cell_size = (high - low).maxCoeff() / cells;
+        if (!(cell_size > 0)) continue;
+
+        // Each vertex is replaced by the first vertex found in its cell.
+        std::unordered_map<std::int64_t, int> first_in_cell;
+        std::vector<int> replacement(vertex_count);
+        for (int i = 0; i < vertex_count; ++i) {
+            std::int64_t key = 0;
+            for (int axis = 0; axis < 3; ++axis)
+                key = key * 4096 + static_cast<std::int64_t>(
+                    (vertices[3 * i + axis] - low[axis]) / cell_size);
+            replacement[i] = first_in_cell.emplace(key, i).first->second;
+        }
+
+        const int first_face = model->mesh_faceadr[mesh];
+        int* faces = model->mesh_face + 3 * first_face;
+        int* normals = model->mesh_facenormal + 3 * first_face;
+        int* texcoords = model->mesh_texcoordadr[mesh] >= 0
+            ? model->mesh_facetexcoord + 3 * first_face : nullptr;
+        int kept = 0;
+        for (int face = 0; face < face_count; ++face) {
+            const int a = replacement[faces[3 * face]];
+            const int b = replacement[faces[3 * face + 1]];
+            const int c = replacement[faces[3 * face + 2]];
+            if (a == b || b == c || a == c) continue;
+            faces[3 * kept] = a;
+            faces[3 * kept + 1] = b;
+            faces[3 * kept + 2] = c;
+            for (int corner = 0; corner < 3; ++corner) {
+                normals[3 * kept + corner] = normals[3 * face + corner];
+                if (texcoords) texcoords[3 * kept + corner] = texcoords[3 * face + corner];
+            }
+            ++kept;
+        }
+        model->mesh_facenum[mesh] = kept;
+    }
+}
 
 // Some models (like the Unitree G1) add a collision geom with the same mesh as
 // each visible geom, and both are drawn by default. Move those copies to
@@ -82,6 +156,7 @@ int MujocoViewer::play(const std::string& scene_path,
     }
     applyCylinderPlacements(model.get());
     hideDuplicateCollisionMeshes(model.get());
+    simplifyMeshesForDisplay(model.get(), kDisplayMeshDetail);
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model.get()), mj_deleteData);
     if (!data) return 1;
     for (const auto& joints : trajectory) {
@@ -134,6 +209,7 @@ MujocoViewer::MujocoViewer(mjModel* model, mjData* data, const std::string& titl
     }
 
     // 1. Initialize GLFW
+    useWslGpuIfAvailable();
     if (!glfwInit()) {
         std::cerr << "Error: Could not initialize GLFW!" << std::endl;
         return;

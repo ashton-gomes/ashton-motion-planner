@@ -14,6 +14,7 @@ struct PlannerDebugStats {
     int obstacle_collision = 0;
     int rmrc_not_converged = 0;
     int joint_path_collision = 0;
+    int joint_limit = 0; // RMRC step left a planned joint's position limits
 };
 
 // Visit every edge in both directions, following the current parent links.

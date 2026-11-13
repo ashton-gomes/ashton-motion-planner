@@ -30,8 +30,10 @@ void checkEnvironments() {
         require(direct.failure_reason == "direct_edge_rejected",
                 name + ": the scene must block the direct motion, got '" +
                 (direct.success ? std::string("success") : direct.failure_reason) + "'.");
-        require(direct.stats.obstacle_collision + direct.stats.joint_path_collision > 0,
-                name + ": the direct motion must be blocked by an obstacle.");
+        // The direct screw may also hit a joint limit before reaching the obstacle.
+        require(direct.stats.obstacle_collision + direct.stats.joint_path_collision +
+                direct.stats.joint_limit > 0,
+                name + ": the direct motion must be blocked by an obstacle or a joint limit.");
     }
 }
 
@@ -57,7 +59,14 @@ void checkG1Arms() {
         const auto checked = planner.validatePath(result, goal);
         require(checked.collision_free && checked.position_error < 1e-3 && checked.rotation_error < 1e-3,
                 robot.name + ": the reached pose must agree with independent MuJoCo FK.");
+        require(checked.joint_limits_ok, robot.name + ": the path must stay within the URDF joint limits.");
     }
+    // The URDF limits the elbow to [-1.0472, 2.0944]; a home pose past it is rejected.
+    RobotConfig bent = robots::g1RightArm();
+    bent.home_joints[3] = 2.2;
+    bool rejected = false;
+    try { MotionPlanner planner(bent, scene); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "A home pose outside the URDF joint limits must be rejected.");
 }
 
 int main() {

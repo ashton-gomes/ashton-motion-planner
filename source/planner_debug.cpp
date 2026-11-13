@@ -59,6 +59,7 @@ int debugPlannerFailure(
               << "Rejected candidates (first failing check):\n"
               << "  No Cartesian progress: " << stats.no_progress << '\n'
               << "  Non-finite RMRC result: " << stats.non_finite << '\n'
+              << "  Joint limit exceeded during RMRC: " << stats.joint_limit << '\n'
               << "  Self-collision during RMRC: " << stats.self_collision << '\n'
               << "  Obstacle collision during RMRC: " << stats.obstacle_collision << '\n'
               << "  RMRC did not converge to the edge pose: " << stats.rmrc_not_converged << '\n'

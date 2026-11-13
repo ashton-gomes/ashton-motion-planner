@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
         trials << "condition,scene,trial,seed,success,valid_path_success,failure_reason,planning_seconds,"
                   "nodes,expansions,position_error_m,rotation_error_rad,joint_limits_ok,collision_free,"
                   "validated_position_error_m,validated_rotation_error_rad,no_progress,non_finite,"
-                  "self_collision,obstacle_collision,rmrc_not_converged,joint_path_collision,"
+                  "self_collision,obstacle_collision,rmrc_not_converged,joint_path_collision,joint_limit,"
                   "goal_x,goal_y,goal_z,goal_w,goal_qx,goal_qy,goal_qz\n";
         summary << "condition,scene,trials,successes,success_rate_percent,valid_paths,"
                    "valid_path_rate_percent,mean_planning_seconds\n";
@@ -143,10 +143,12 @@ int main(int argc, char** argv) {
             if (options.condition != "all" && options.condition != condition.name) continue;
             // Models are loaded once per fixed scene; all per-trial randomness
             // is reset before sampling the goal. Empty-space tasks are paired.
+            // This robot's version of the scene, e.g. g1_wall_hole.xml.
+            const std::string scene = robot.environment_prefix + condition.scene;
             seedSampling(options.seed, false);
             seedRRTSampling(options.seed);
             MotionPlanner planner(robot,
-                (std::filesystem::path(ENVIRONMENTS_PATH) / condition.scene).string(), settings);
+                (std::filesystem::path(ENVIRONMENTS_PATH) / scene).string(), settings);
             Summary totals;
             for (int trial = 0; trial < options.trials; ++trial) {
                 const std::uint32_t seed = options.seed + static_cast<std::uint32_t>(trial);
@@ -171,7 +173,7 @@ int main(int argc, char** argv) {
                 totals.seconds += result.planning_seconds;
                 if (!result.success) ++totals.failures[result.failure_reason];
                 const auto& s = result.stats;
-                trials << condition.name << ',' << condition.scene << ',' << trial + 1 << ',' << seed << ','
+                trials << condition.name << ',' << scene << ',' << trial + 1 << ',' << seed << ','
                        << result.success << ',' << validation.valid << ',' << csv(result.failure_reason) << ','
                        << result.planning_seconds << ',' << result.tree.size() << ',' << s.expansions << ',';
                 if (goal_sampled) trials << result.position_error << ',' << result.rotation_error;
@@ -182,7 +184,8 @@ int main(int argc, char** argv) {
                     << ',' << validation.position_error << ',' << validation.rotation_error;
                 else trials << ",,,";
                 trials << ',' << s.no_progress << ',' << s.non_finite << ',' << s.self_collision << ','
-                       << s.obstacle_collision << ',' << s.rmrc_not_converged << ',' << s.joint_path_collision;
+                       << s.obstacle_collision << ',' << s.rmrc_not_converged << ',' << s.joint_path_collision
+                       << ',' << s.joint_limit;
                 for (int i = 0; i < 7; ++i) {
                     trials << ',';
                     if (goal_sampled) trials << goal[i];
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
             }
             const double rate = 100.0 * totals.successes / totals.trials;
             const double valid_rate = 100.0 * totals.valid_paths / totals.trials;
-            summary << condition.name << ',' << condition.scene << ',' << totals.trials << ','
+            summary << condition.name << ',' << scene << ',' << totals.trials << ','
                     << totals.successes << ',' << rate << ',' << totals.valid_paths << ','
                     << valid_rate << ',' << totals.seconds / totals.trials << '\n';
             summary.flush();
