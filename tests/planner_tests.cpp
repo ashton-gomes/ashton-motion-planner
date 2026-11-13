@@ -1,5 +1,5 @@
-#include "planner.hpp"
-#include "robots.hpp"
+#include "gplanner/planner.hpp"
+#include "testbed/robots.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -17,10 +17,10 @@ void checkEnvironments() {
     for (const auto& entry : std::filesystem::directory_iterator(ENVIRONMENTS_PATH)) {
         if (entry.path().extension() != ".xml") continue;
         const std::string name = entry.path().filename().string();
-        seedSampling(1, false);
+        seedSampling(1);
         // Files named g1_*.xml include the G1; the others include the Kinova Gen3.
         const bool g1 = name.rfind("g1_", 0) == 0;
-        MotionPlanner planner(g1 ? robots::g1RightArm() : robots::kinovaGen3(),
+        MotionPlanner planner(g1 ? robots::g1RightArm().config : robots::kinovaGen3().config,
                               entry.path().string());
         if (!planner.sceneGoal()) continue;
         const Pose& goal = *planner.sceneGoal();
@@ -41,8 +41,8 @@ void checkEnvironments() {
 // are held still, in the obstacle-free G1 environment.
 void checkG1Arms() {
     const std::string scene = (std::filesystem::path(ENVIRONMENTS_PATH) / "g1_empty.xml").string();
-    for (const RobotConfig& robot : {robots::g1RightArm(), robots::g1LeftArm()}) {
-        seedSampling(1, false);
+    for (const RobotConfig& robot : {robots::g1RightArm().config, robots::g1LeftArm().config}) {
+        seedSampling(1);
         seedRRTSampling(1);
         MotionPlanner planner(robot, scene);
         require(planner.dof() == 7, robot.name + ": expected 7 planned joints.");
@@ -62,7 +62,7 @@ void checkG1Arms() {
         require(checked.joint_limits_ok, robot.name + ": the path must stay within the URDF joint limits.");
     }
     // The URDF limits the elbow to [-1.0472, 2.0944]; a home pose past it is rejected.
-    RobotConfig bent = robots::g1RightArm();
+    RobotConfig bent = robots::g1RightArm().config;
     bent.home_joints[3] = 2.2;
     bool rejected = false;
     try { MotionPlanner planner(bent, scene); } catch (const std::runtime_error&) { rejected = true; }
@@ -73,9 +73,9 @@ int main() {
     try {
         checkEnvironments();
         checkG1Arms();
-        seedSampling(1, false);
+        seedSampling(1);
         seedRRTSampling(1);
-        MotionPlanner planner(robots::kinovaGen3(),
+        MotionPlanner planner(robots::kinovaGen3().config,
             (std::filesystem::path(ENVIRONMENTS_PATH) / "empty.xml").string());
         for (auto mode : {PlannerMode::DirectScLERP, PlannerMode::SampledScLERP}) {
             const auto result = planner.plan(planner.homePose(), mode);
@@ -102,16 +102,16 @@ int main() {
             require(result.success, "A small pure-rotation task must converge.");
             require(planner.validatePath(result, rotation_goal).valid, "Pure rotation must validate.");
         }
-        seedSampling(1, false);
+        seedSampling(1);
         const Pose goal = planner.sampleGoal();
         const auto direct = planner.plan(goal, PlannerMode::DirectScLERP);
         require(direct.stats.expansions == 1 && direct.tree.size() <= 2,
                 "Direct ScLERP must never create a sampled tree.");
-        seedSampling(1, false);
+        seedSampling(1);
         seedRRTSampling(1);
         require(goal.isApprox(planner.sampleGoal(), 1e-14), "Seed reset must reproduce the full goal pose.");
         const auto first = planner.plan(goal, PlannerMode::SampledScLERP);
-        seedSampling(1, false);
+        seedSampling(1);
         seedRRTSampling(1);
         planner.sampleGoal();
         const auto repeated = planner.plan(goal, PlannerMode::SampledScLERP);

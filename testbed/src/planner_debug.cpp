@@ -1,5 +1,5 @@
-#include "planner_debug.hpp"
-#include "viewer.hpp"
+#include "testbed/planner_debug.hpp"
+#include "testbed/viewer.hpp"
 
 #include <Eigen/Geometry>
 #include <iostream>

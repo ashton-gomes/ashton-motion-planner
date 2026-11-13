@@ -1,4 +1,4 @@
-#include "robots.hpp"
+#include "testbed/robots.hpp"
 
 #include <string>
 
@@ -27,18 +27,20 @@ std::vector<std::string> g1ArmJoints(const std::string& side) {
 
 }  // namespace
 
-RobotConfig kinovaGen3() {
-    RobotConfig robot;
+TestRobot kinovaGen3() {
+    TestRobot test_robot;
+    RobotConfig& robot = test_robot.config;
     robot.name = "kinova_gen3";
     robot.model_path = kRoot + "/mujoco_menagerie/kinova_gen3/gen3.xml";
     robot.tool_body = "bracelet_link";
     // joint_names left empty: the model contains only the arm's 7 joints.
     // home_joints left empty: the model's "home" keyframe is used.
-    return robot;
+    return test_robot;
 }
 
-RobotConfig g1RightArm() {
-    RobotConfig robot;
+TestRobot g1RightArm() {
+    TestRobot test_robot;
+    RobotConfig& robot = test_robot.config;
     robot.name = "g1_right_arm";
     robot.model_path = kG1Model;
     robot.urdf_path = kG1Urdf;
@@ -50,14 +52,15 @@ RobotConfig g1RightArm() {
     // In the default pose the forearms point straight forward. Let the other
     // arm hang at the side (elbow bent 1.5 rad) so it stays out of the obstacles.
     robot.held_joints = {{"left_shoulder_roll_joint", 0.3}, {"left_elbow_joint", 1.5}};
-    robot.environment_prefix = "g1_";  // environments/g1_*.xml
+    test_robot.environment_prefix = "g1_";  // environments/g1_*.xml
     // The model draws the hands but gives them no collision shape.
     robot.visual_collision_meshes = {"right_rubber_hand", "left_rubber_hand"};
-    return robot;
+    return test_robot;
 }
 
-RobotConfig g1LeftArm() {
-    RobotConfig robot;
+TestRobot g1LeftArm() {
+    TestRobot test_robot;
+    RobotConfig& robot = test_robot.config;
     robot.name = "g1_left_arm";
     robot.model_path = kG1Model;
     robot.urdf_path = kG1Urdf;
@@ -67,11 +70,11 @@ RobotConfig g1LeftArm() {
     robot.held_joints = {{"right_shoulder_roll_joint", -0.3}, {"right_elbow_joint", 1.5}};
     // The g1_ environments are laid out for the right arm, so none is set here.
     robot.visual_collision_meshes = {"right_rubber_hand", "left_rubber_hand"};
-    return robot;
+    return test_robot;
 }
 
 // Change this line to switch the robot used by `testing` and `benchmark`.
 // The environment files must include the same robot model.
-RobotConfig active() { return kinovaGen3(); }
+TestRobot active() { return kinovaGen3(); }
 
 }  // namespace robots

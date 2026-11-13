@@ -1,10 +1,24 @@
 #pragma once
 
-#include "planner_debug.hpp"
-#include "robot_config.hpp"
+#include "gplanner/robot_config.hpp"
+#include "gplanner/rrt_star.hpp"
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
+
+// Count the first reason each candidate edge was rejected.
+struct PlannerDebugStats {
+    int expansions = 0;
+    int no_progress = 0;
+    int non_finite = 0;
+    int self_collision = 0;
+    int obstacle_collision = 0;
+    int rmrc_not_converged = 0;
+    int joint_path_collision = 0;
+    int joint_limit = 0; // RMRC step left a planned joint's position limits
+};
 
 using Pose = Eigen::Matrix<double, 7, 1>;
 
@@ -35,8 +49,10 @@ struct PathValidation {
 class MotionPlanner {
 public:
     // scene_xml must contain the robot's model, e.g. through <include>.
+    // edit_scene, if set, is applied to each copy of the scene the planner loads.
     MotionPlanner(const RobotConfig& robot, const std::string& scene_xml,
-                  const RRTStarSettings& settings = {});
+                  const RRTStarSettings& settings = {},
+                  const SceneEditor& edit_scene = {});
     ~MotionPlanner();
     const RobotConfig& robot() const;
     // Number of planned joints.

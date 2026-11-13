@@ -29,7 +29,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 For a machine without GLFW, configure with `-DBUILD_VIEWER=OFF`. The benchmark
-and tests use `planner_core` and never open a viewer. The existing interactive
+and tests use the `gplanner` library and `testbed_core` and never open a viewer. The existing interactive
 application is still `./build/testing`.
 
 A quick run or a single condition:
@@ -97,12 +97,12 @@ help distinguish these cases instead of discarding them.
 
 ## Modules
 
-`MotionPlanner` in `include/planner.hpp` owns reusable robot and collision models.
+`MotionPlanner` in `planner/include/gplanner/planner.hpp` owns reusable robot and collision models.
 `sampleGoal()`, `plan(goal, mode)`, and `validatePath()` are shared by the headless
 runner and interactive application. Kinematics, ScLERP, and RMRC are in
-`source/planner.cpp`; node sampling and tree operations remain in `sampler.cpp`
-and `rrt_star.cpp`. The condition table and CSV reporting are in
-`source/benchmark.cpp`.
+`planner/src/planner.cpp`; node sampling and tree operations are in
+`planner/src/sampler.cpp` and `planner/src/rrt_star.cpp`. The condition table and CSV reporting are in
+`testbed/apps/benchmark.cpp`.
 
 Direct mode interpolates a single home-to-goal screw. Its integration density
 scales with translation (one base interval per `maximum_step`) and rotation

@@ -20,12 +20,12 @@ automatically through `environment_prefix` (see below).
 
 ## How to switch robots
 
-Change `robots::active()` in [source/robots.cpp](../source/robots.cpp):
+Change `robots::active()` in [testbed/src/robots.cpp](../testbed/src/robots.cpp):
 
 ```cpp
 // Change this line to switch the robot used by `testing` and `benchmark`.
 // The environment files must include the same robot model.
-RobotConfig active() { return kinovaGen3(); }   // or g1RightArm(), g1LeftArm()
+TestRobot active() { return kinovaGen3(); }   // or g1RightArm(), g1LeftArm()
 ```
 
 Then rebuild (`make` in `build/`). `testing` prints the selected robot when it
@@ -33,22 +33,27 @@ starts, e.g. `Robot: kinova_gen3 (7 joints).`
 
 ## How to add a new robot
 
-Add a function to [source/robots.cpp](../source/robots.cpp) and declare it in
-[include/robots.hpp](../include/robots.hpp):
+Add a function to [testbed/src/robots.cpp](../testbed/src/robots.cpp) and declare it in
+[testbed/include/testbed/robots.hpp](../testbed/include/testbed/robots.hpp):
 
 ```cpp
-RobotConfig myArm() {
-    RobotConfig robot;
+TestRobot myArm() {
+    TestRobot test_robot;
+    RobotConfig& robot = test_robot.config;   // what the planner needs
     robot.name = "my_arm";
     robot.model_path = kRoot + "/path/to/my_arm.xml";   // MJCF, or a URDF MuJoCo can load
     robot.tool_body = "end_effector_link";
     robot.joint_names = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
     robot.home_joints = {0.0, 0.5, 0.0, 1.0, 0.0, 0.0};  // or leave empty and add a "home" keyframe
-    return robot;
+    test_robot.environment_prefix = "my_arm_";  // optional: environments/my_arm_*.xml
+    return test_robot;
 }
 ```
 
-The `RobotConfig` fields ([include/robot_config.hpp](../include/robot_config.hpp)):
+`RobotConfig` is the planner's part and is all `MotionPlanner` takes.
+`TestRobot` adds settings only the testbed uses.
+
+The `RobotConfig` fields ([planner/include/gplanner/robot_config.hpp](../planner/include/gplanner/robot_config.hpp)):
 
 | Field | What it is | If left empty |
 |---|---|---|
@@ -60,6 +65,11 @@ The `RobotConfig` fields ([include/robot_config.hpp](../include/robot_config.hpp
 | `home_keyframe` | Keyframe name, default `"home"` | joints not planned use the model's default pose |
 | `held_joints` | Positions for joints that are not planned, by name (e.g. let a humanoid's other arm hang at its side) | keyframe or default pose |
 | `visual_collision_meshes` | Meshes the model only draws but that should block motion too; the planner adds a collision copy of each when loading (the G1's hands) | only the model's own collision shapes |
+
+`TestRobot` adds one testbed-only field:
+
+| Field | What it is | If left empty |
+|---|---|---|
 | `environment_prefix` | Prefix of this robot's environment files, e.g. `"g1_"` → `g1_wall_hole.xml` | the plain (Kinova) files |
 
 The planner reads everything else from the model file: joint axes, joint
@@ -141,15 +151,18 @@ replay (`debugPlannerFailure`) use them. For the Kinova, the two are the same.
 
 ## What changed, file by file
 
+This records the change that made robots modular. File paths are updated to
+the current `planner/` and `testbed/` layout.
+
 **New files**
 
-- [include/robot_config.hpp](../include/robot_config.hpp): the `RobotConfig` struct.
-- [include/robots.hpp](../include/robots.hpp), [source/robots.cpp](../source/robots.cpp):
+- [planner/include/gplanner/robot_config.hpp](../planner/include/gplanner/robot_config.hpp): the `RobotConfig` struct.
+- [testbed/include/testbed/robots.hpp](../testbed/include/testbed/robots.hpp), [testbed/src/robots.cpp](../testbed/src/robots.cpp):
   the Kinova and G1 presets, and `robots::active()`.
 
 **Changed files**
 
-- [source/planner.cpp](../source/planner.cpp)
+- [planner/src/planner.cpp](../planner/src/planner.cpp)
   - Removed `const int n = 7` and the hard-coded `ROBOT_XML_PATH`.
   - All `Eigen::Matrix<double, n, …>` types became dynamic (`JointVector`, `SpatialJacobian`).
   - `extractURDF(path)` became `loadRobot(config)` (see "How it works" above).
@@ -160,20 +173,20 @@ replay (`debugPlannerFailure`) use them. For the Kinova, the two are the same.
   - Scene `start`/`goal` keyframes are read through the binding, so a scene can
     have more joints than the planned arm.
   - New methods: `robot()`, `dof()`, `toSceneQpos()`, `toSceneTrajectory()`.
-- [include/planner.hpp](../include/planner.hpp): the constructor takes a
+- [planner/include/gplanner/planner.hpp](../planner/include/gplanner/planner.hpp): the constructor takes a
   `RobotConfig` instead of a model path, plus the four new methods.
-- [include/sampler.hpp](../include/sampler.hpp), [source/sampler.cpp](../source/sampler.cpp):
+- [planner/include/gplanner/sampler.hpp](../planner/include/gplanner/sampler.hpp), [planner/src/sampler.cpp](../planner/src/sampler.cpp):
   `loadSceneObstacles()` takes the robot's body names and skips their geoms
   (it used to skip group 3).
-- [include/planner_debug.hpp](../include/planner_debug.hpp), [source/planner_debug.cpp](../source/planner_debug.cpp):
+- [testbed/include/testbed/planner_debug.hpp](../testbed/include/testbed/planner_debug.hpp), [testbed/src/planner_debug.cpp](../testbed/src/planner_debug.cpp):
   `debugPlannerFailure()` takes a function that converts joints to a scene pose
   before replaying the tree.
-- [source/main.cpp](../source/main.cpp): uses `robots::active()`, prints the
+- [testbed/apps/testing.cpp](../testbed/apps/testing.cpp): uses `robots::active()`, prints the
   robot, converts trajectories for the viewer.
-- [source/benchmark.cpp](../source/benchmark.cpp): uses `robots::active()`;
+- [testbed/apps/benchmark.cpp](../testbed/apps/benchmark.cpp): uses `robots::active()`;
   `settings.csv` now also records the robot `name`.
 - [CMakeLists.txt](../CMakeLists.txt): `KINOVA_MODEL_PATH` / `ROBOT_XML_PATH` removed;
-  `source/robots.cpp` added to `planner_core`, with `PROJECT_ROOT_PATH` so model
+  `robots.cpp` added to the build, with `PROJECT_ROOT_PATH` so model
   paths are relative to the repository.
 - [tests/planner_tests.cpp](../tests/planner_tests.cpp): existing tests use
   `robots::kinovaGen3()`. New `checkG1Arms()` test: for each G1 arm, home is
@@ -210,7 +223,7 @@ planner checks them like any other link.
 | Scene | Task |
 |---|---|
 | `g1_empty.xml` | No obstacles, random goal |
-| `g1_random_cylinders.xml` | Three posts in front of the right shoulder, random goal. Posts named `g1_obs_cylinder_*` move randomly on each interactive run (G1 layout in `source/sampler.cpp`) |
+| `g1_random_cylinders.xml` | Three posts in front of the right shoulder, random goal. Posts named `g1_obs_cylinder_*` move randomly on each interactive run (G1 layout in `testbed/src/scene_randomizer.cpp`) |
 | `g1_wall_hole.xml` | Reach through a 20 cm window in a wall 0.24 m in front |
 | `g1_long_cylinders.xml` | Reach out between two of three tall posts on an arc around the right shoulder |
 | `g1_under_table.xml` | From above a chest-high table to under its near edge (chest-high so the hand fits above and below it within reach) |

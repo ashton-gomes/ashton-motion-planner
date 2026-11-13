@@ -45,23 +45,56 @@ ctest --test-dir build --output-on-failure
 
 ## Project layout
 
+The project has two parts: the **planner**, a library that knows nothing about
+specific robots or scenes, and the **testbed**, which supplies robots, scenes,
+a viewer, and a benchmark for trying it out.
+
 | Path | Contents |
 | --- | --- |
-| `include/`, `source/` | Planner library (`planner_core`), viewer, and executables |
-| `tests/` | C++ planner tests and benchmark smoke tests (run with `ctest`) |
+| `planner/` | The `gplanner` library: RRT/RRT*, ScLERP, RMRC, collision checking. Depends only on Eigen and MuJoCo (headless) |
+| `testbed/src/`, `testbed/include/testbed/` | Robot presets, random obstacle placement, scene selection (`testbed_core`), and the MuJoCo/GLFW viewer (`testbed_viewer`) |
+| `testbed/apps/` | The `testing` (interactive) and `benchmark` programs |
+| `tests/` | Planner integration tests and benchmark smoke tests (run with `ctest`) |
 | `environments/` | MuJoCo scene XMLs for the Kinova Gen3 and G1 |
-| `benchmark/` | Parallel benchmark runner and recorded results; see [BENCHMARK.md](BENCHMARK.md) |
 | `docs/` | Design notes, e.g. [modular robots](docs/modular_robots.md) |
 | `scripts/` | Bash shortcuts |
 | `mujoco_menagerie/` | Vendored Kinova Gen3 model |
 | `unitree_ros/` | Unitree G1 model (git submodule) |
 
+To build only the planner library, configure with
+`-DGPLANNER_BUILD_TESTBED=OFF`.
+
+## Using the planner on its own
+
+Add the `planner/` directory to another CMake project and link
+`gplanner::planner`:
+
+```cmake
+add_subdirectory(path/to/gplanner/planner gplanner)
+target_link_libraries(my_app PRIVATE gplanner::planner)
+```
+
+Describe the robot with a `RobotConfig` and pass a scene that includes it:
+
+```cpp
+#include "gplanner/planner.hpp"
+
+RobotConfig robot;
+robot.name = "my_arm";
+robot.model_path = "/path/to/my_arm.xml";
+robot.tool_body = "end_effector_link";
+
+MotionPlanner planner(robot, "/path/to/scene.xml");
+const Pose goal = planner.sampleGoal();  // or your own [x, y, z, qw, qx, qy, qz]
+const PlanResult result = planner.plan(goal, PlannerMode::SampledScLERP);
+```
+
 ## Choosing the robot
 
-The robot arm is set in `robots::active()` in `source/robots.cpp` (Kinova Gen3
-by default; G1 left and right arms are also available). See
-[docs/modular_robots.md](docs/modular_robots.md) for how to switch robots or
-add a new one.
+The testbed's robot arm is set in `robots::active()` in
+`testbed/src/robots.cpp` (Kinova Gen3 by default; G1 left and right arms are
+also available). See [docs/modular_robots.md](docs/modular_robots.md) for how
+to switch robots or add a new one.
 
 ## Benchmark
 

@@ -1,5 +1,5 @@
-#include "planner.hpp"
-#include "robots.hpp"
+#include "gplanner/planner.hpp"
+#include "testbed/robots.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -109,8 +109,9 @@ int main(int argc, char** argv) {
         summary << std::setprecision(10);
         RRTStarSettings settings;
         settings.max_expansions = options.max_expansions;
-        // To benchmark another arm, change robots::active() in source/robots.cpp.
-        const RobotConfig robot = robots::active();
+        // To benchmark another arm, change robots::active() in testbed/src/robots.cpp.
+        const robots::TestRobot test_robot = robots::active();
+        const RobotConfig& robot = test_robot.config;
         metadata << "setting,value\ntrials_per_condition," << options.trials
                  << "\nfirst_seed," << options.seed << "\ncondition," << options.condition
                  << "\nrobot," << csv(robot.name)
@@ -144,15 +145,15 @@ int main(int argc, char** argv) {
             // Models are loaded once per fixed scene; all per-trial randomness
             // is reset before sampling the goal. Empty-space tasks are paired.
             // This robot's version of the scene, e.g. g1_wall_hole.xml.
-            const std::string scene = robot.environment_prefix + condition.scene;
-            seedSampling(options.seed, false);
+            const std::string scene = test_robot.environment_prefix + condition.scene;
+            seedSampling(options.seed);
             seedRRTSampling(options.seed);
             MotionPlanner planner(robot,
                 (std::filesystem::path(ENVIRONMENTS_PATH) / scene).string(), settings);
             Summary totals;
             for (int trial = 0; trial < options.trials; ++trial) {
                 const std::uint32_t seed = options.seed + static_cast<std::uint32_t>(trial);
-                seedSampling(seed, false);
+                seedSampling(seed);
                 seedRRTSampling(seed);
                 Pose goal;
                 bool goal_sampled = false;

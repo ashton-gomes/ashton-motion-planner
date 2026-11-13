@@ -8,8 +8,8 @@
 #include <stdexcept>
 #include <vector>
 #include <mujoco/mujoco.h>
-#include "rrt_star.hpp"
-#include "planner.hpp"
+#include "gplanner/planner.hpp"
+#include "gplanner/rrt_star.hpp"
 #include <chrono>
 #include <array>
 #include <limits>
@@ -911,10 +911,10 @@ private:
 class ObstacleCollisionChecker {
 public:
     ObstacleCollisionChecker(const std::string& scene_path, const RobotModel& robot,
-                             double clearance)
+                             double clearance, const SceneEditor& edit_scene)
         : model_(loadModel(scene_path, "Scene collision", robot.visual_collision_meshes)),
           data_(nullptr, mj_deleteData) {
-        applyCylinderPlacements(model_.get());
+        if (edit_scene) edit_scene(model_.get());
         binding_ = bindChain(model_.get(), robot, "Scene " + scene_path);
         // A geom belongs to the robot if its body is one of the robot's bodies.
         robot_geom_.resize(model_->ngeom);
@@ -1037,11 +1037,12 @@ struct MotionPlanner::Impl {
     static constexpr double beta = 0.1;
 
     Impl(const RobotConfig& robot_config, const std::string& scene_xml,
-         const RRTStarSettings& options)
+         const RRTStarSettings& options, const SceneEditor& edit_scene)
         : config(robot_config), robot(loadRobot(robot_config)), settings(options),
           self(robot_config.model_path, robot),
-          scene(scene_xml, robot, options.obstacle_clearance),
-          obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance, robot.body_names)) {
+          scene(scene_xml, robot, options.obstacle_clearance, edit_scene),
+          obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance, robot.body_names,
+                                       edit_scene)) {
         validateRRTSettings(settings);
         loadSceneTask(scene_xml);
     }
@@ -1197,8 +1198,9 @@ struct MotionPlanner::Impl {
 };
 
 MotionPlanner::MotionPlanner(const RobotConfig& robot, const std::string& scene_xml,
-                             const RRTStarSettings& settings)
-    : impl_(std::make_unique<Impl>(robot, scene_xml, settings)) {}
+                             const RRTStarSettings& settings,
+                             const SceneEditor& edit_scene)
+    : impl_(std::make_unique<Impl>(robot, scene_xml, settings, edit_scene)) {}
 MotionPlanner::~MotionPlanner() = default;
 const RobotConfig& MotionPlanner::robot() const { return impl_->config; }
 int MotionPlanner::dof() const { return impl_->robot.dof(); }

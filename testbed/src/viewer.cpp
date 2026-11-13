@@ -1,5 +1,5 @@
-#include "viewer.hpp"
-#include "sampler.hpp"
+#include "testbed/viewer.hpp"
+#include "testbed/scene_randomizer.hpp"
 #include <Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>

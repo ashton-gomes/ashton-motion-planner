@@ -6,7 +6,8 @@
 
 // Everything the planner needs to know about one robot arm. The planner reads
 // the joint axes, limits, and link lengths from the model file itself, so a new
-// arm only needs a new RobotConfig (see include/robots.hpp).
+// arm only needs a new RobotConfig (the testbed's are in
+// testbed/include/testbed/robots.hpp).
 struct RobotConfig {
     // Short label used in messages and benchmark output.
     std::string name;
@@ -47,9 +48,4 @@ struct RobotConfig {
     // loads the model. The G1's hands need this: without it, the planner
     // lets them pass through obstacles.
     std::vector<std::string> visual_collision_meshes;
-
-    // Environment files made for this robot are named <prefix><scene>.xml,
-    // e.g. "g1_" + "wall_hole.xml". The benchmark and the default scene in
-    // `testing` use this to pick this robot's version of each scene.
-    std::string environment_prefix;
 };

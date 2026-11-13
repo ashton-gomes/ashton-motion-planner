@@ -1,21 +1,9 @@
 #pragma once
 
-#include "rrt_star.hpp"
+#include "gplanner/planner.hpp"
 
 #include <functional>
 #include <string>
-
-// Count the first reason each candidate edge was rejected.
-struct PlannerDebugStats {
-    int expansions = 0;
-    int no_progress = 0;
-    int non_finite = 0;
-    int self_collision = 0;
-    int obstacle_collision = 0;
-    int rmrc_not_converged = 0;
-    int joint_path_collision = 0;
-    int joint_limit = 0; // RMRC step left a planned joint's position limits
-};
 
 // Visit every edge in both directions, following the current parent links.
 std::vector<Eigen::VectorXd> buildTreeDebugTrajectory(

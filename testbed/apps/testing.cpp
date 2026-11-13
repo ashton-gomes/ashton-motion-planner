@@ -1,7 +1,9 @@
-#include "environment_selector.hpp"
-#include "planner.hpp"
-#include "robots.hpp"
-#include "viewer.hpp"
+#include "gplanner/planner.hpp"
+#include "testbed/environment_selector.hpp"
+#include "testbed/planner_debug.hpp"
+#include "testbed/robots.hpp"
+#include "testbed/scene_randomizer.hpp"
+#include "testbed/viewer.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -25,15 +27,17 @@ std::string trialVideoPath(const std::string& scene) {
 
 int main() {
     try {
-        // To plan with another arm, change robots::active() in source/robots.cpp.
-        const RobotConfig robot = robots::active();
+        // To plan with another arm, change robots::active() in testbed/src/robots.cpp.
+        const robots::TestRobot test_robot = robots::active();
+        const RobotConfig& robot = test_robot.config;
         // Default to this robot's version of the scene, e.g. g1_wall_hole.xml.
         const std::filesystem::path default_scene(SCENE_XML_PATH);
         const std::string scene = selectEnvironment(
-            (default_scene.parent_path() / (robot.environment_prefix +
+            (default_scene.parent_path() / (test_robot.environment_prefix +
                 default_scene.filename().string())).string(), std::cin, std::cout);
         RRTStarSettings settings;
-        MotionPlanner planner(robot, scene, settings);
+        // Random cylinder positions are applied to every copy of the scene.
+        MotionPlanner planner(robot, scene, settings, applyCylinderPlacements);
         std::cout << "Robot: " << planner.robot().name << " (" << planner.dof() << " joints).\n";
         const bool fixed_goal = planner.sceneGoal().has_value();
         const Pose goal = fixed_goal ? *planner.sceneGoal() : planner.sampleGoal();

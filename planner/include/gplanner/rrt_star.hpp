@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
-#include "sampler.hpp"
+#include "gplanner/sampler.hpp"
 
 #include <functional>
 #include <vector>
