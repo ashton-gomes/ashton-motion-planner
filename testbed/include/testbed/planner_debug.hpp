@@ -11,7 +11,7 @@ std::vector<Eigen::VectorXd> buildTreeDebugTrajectory(
 
 // Report the observed failure and replay the partial tree. Always returns 1.
 // to_scene_qpos turns planned-joint values into a full scene qpos
-// (MotionPlanner::toSceneQpos).
+// (MotionPlanner::toSceneQpos). overlay boxes are drawn over the scene.
 int debugPlannerFailure(
     const std::string& reason,
     const PlannerDebugStats& stats,
@@ -19,4 +19,5 @@ int debugPlannerFailure(
     const std::string& scene_path,
     const Eigen::Matrix<double, 7, 1>& goal,
     int frames_per_edge,
-    const std::function<Eigen::VectorXd(const Eigen::VectorXd&)>& to_scene_qpos);
+    const std::function<Eigen::VectorXd(const Eigen::VectorXd&)>& to_scene_qpos,
+    const std::vector<SceneObstacle>& overlay = {});

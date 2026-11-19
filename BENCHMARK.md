@@ -39,6 +39,28 @@ A quick run or a single condition:
 ./build/benchmark --condition sampled_empty --trials 1000 --seed 1 --output empty-results
 ```
 
+### Known geometry vs a simulated depth sensor
+
+`--obstacles known|sensed|both` (default `known`) picks where the planner gets
+obstacles from: the scene's exact shapes, or a point cloud from the robot's
+simulated depth cameras (see the README). The cloud is captured once per
+condition, with noise seeded by `--seed`.
+
+```bash
+./build/benchmark --obstacles both --trials 100 --output sensing-results
+```
+
+- With `both`, every trial runs in both modes with the same goal and planner
+  seed, so the rows are paired.
+- Goals always come from the true scene, and every path is validated against
+  the true geometry. `valid_path_success` and `collision_free` for a sensed row
+  therefore say whether the plan is safe in reality, not just in the planner's
+  view.
+- Both CSVs have an `obstacles` column (`known` or `sensed`). `summary.csv` also
+  reports `obstacle_boxes` (scene geoms, or sensed voxel boxes) and
+  `cloud_points` (sensed rows only). `settings.csv` records the voxel and
+  camera settings.
+
 Options are `--trials`, `--seed`, `--condition`, `--output`,
 `--max-expansions` (default 1000), and `--validation-checks` (default 240).
 `--help` lists the condition names. Output directories may already exist, but

@@ -1,9 +1,11 @@
 # Testbed: ready-made robots, scenes, the benchmark, and the interactive viewer
 # for trying out gplanner. The planner library does not depend on any of this.
 
-# Robots, scene randomization, and scene selection (no graphics).
+# Robots, scene randomization, scene selection, and the simulated depth
+# sensor (no graphics).
 add_library(testbed_core src/robots.cpp src/scene_randomizer.cpp
-                         src/environment_selector.cpp)
+                         src/environment_selector.cpp src/sensor.cpp
+                         src/obstacle_mode.cpp)
 target_include_directories(testbed_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(testbed_core PUBLIC gplanner::planner)
 # Robot models are listed in src/robots.cpp, relative to the repository root.

@@ -96,6 +96,39 @@ The testbed's robot arm is set in `robots::active()` in
 also available). See [docs/modular_robots.md](docs/modular_robots.md) for how
 to switch robots or add a new one.
 
+## Known obstacles or a simulated depth sensor
+
+The planner can get its obstacles from two sources (`ObstacleSource` in
+`planner/include/gplanner/obstacles.hpp`):
+
+- **Known geometry** (default): the scene XML's exact obstacle shapes.
+- **Point cloud**: points from a depth sensor, given with
+  `MotionPlanner::setPointCloud`. The planner drops the floor and points far
+  from the arm, groups the rest into 2 cm voxels, removes voxels on the robot
+  itself (at its start pose), and plans around the remaining voxel boxes. The
+  scene XML then only supplies the robot and the task.
+
+The testbed simulates the sensor: `SimulatedDepthSensor`
+(`testbed/include/testbed/sensor.hpp`) casts one ray per pixel into the scene,
+with depth noise and dropout. Each robot has its own cameras in
+`testbed/src/robots.cpp`: a fixed camera behind the Kinova, and a head camera on
+the G1. A real camera can replace it later by implementing the same
+`DepthSensor::capture()` interface, returning points in the world frame.
+
+To switch modes:
+
+- **`testing`:** set `kObstacleMode` at the top of `testbed/apps/testing.cpp`
+  to `ObstacleMode::SimulatedSensor`. The viewer then draws the sensed voxel
+  boxes in translucent blue over the real scene.
+- **`benchmark`:** pass `--obstacles known|sensed|both`. With `both`, each
+  trial runs in both modes with the same goal and seed. Paths are always
+  validated against the scene's true geometry, so a sensed plan that hits
+  something the cameras missed counts as invalid.
+
+Sensing makes narrow passages harder: voxels plus the 2 cm clearance shrink
+gaps such as the 20 cm wall windows, and occluded parts of obstacles are
+treated as free.
+
 ## Benchmark
 
 See [BENCHMARK.md](BENCHMARK.md) for the experiment design, how to run it, and

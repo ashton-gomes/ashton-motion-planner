@@ -1,6 +1,6 @@
 <!-- Random cylinders (G1 right arm): three posts in front of the right shoulder
      with a random goal. The interactive app moves the posts randomly on every
-     run (see the g1 layout in source/sampler.cpp); the benchmark uses the
+     run (see the g1 layout in testbed/src/scene_randomizer.cpp); the benchmark uses the
      positions written here. -->
 <mujoco model="G1 random cylinders">
   <include file="../unitree_ros/robots/g1_description/g1_29dof.xml"/>

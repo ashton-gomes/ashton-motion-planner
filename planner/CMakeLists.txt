@@ -13,7 +13,7 @@ if(NOT TARGET mujoco::mujoco)
         INTERFACE_INCLUDE_DIRECTORIES "${MUJOCO_ROOT}/include")
 endif()
 
-add_library(gplanner src/planner.cpp src/rrt_star.cpp src/sampler.cpp)
+add_library(gplanner src/planner.cpp src/rrt_star.cpp src/sampler.cpp src/obstacles.cpp)
 add_library(gplanner::planner ALIAS gplanner)
 target_include_directories(gplanner PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(gplanner PUBLIC Eigen3::Eigen mujoco::mujoco)

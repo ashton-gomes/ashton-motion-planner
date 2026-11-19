@@ -19,6 +19,8 @@ constexpr double kPlaybackFps = 60.0;
 // which is slow when WSL renders on the CPU (llvmpipe). Set to false for the
 // nicer look.
 constexpr bool kLightweightRendering = true;
+// Scene geometry capacity before any overlay boxes.
+constexpr int kSceneGeoms = 2000;
 
 // Draw meshes with fewer triangles: nearby vertices are merged on a grid with
 // this many cells along each mesh's longest side. Display only; the planner's
@@ -145,7 +147,8 @@ int MujocoViewer::play(const std::string& scene_path,
                        const std::vector<Eigen::VectorXd>& trajectory,
                        const Eigen::Matrix<double, 7, 1>& start,
                        const Eigen::Matrix<double, 7, 1>& end,
-                       const std::string& video_path) {
+                       const std::string& video_path,
+                       const std::vector<SceneObstacle>& overlay) {
     if (trajectory.empty()) return 1;
     char error[1000]{};
     std::unique_ptr<mjModel, decltype(&mj_deleteModel)> model(
@@ -169,6 +172,7 @@ int MujocoViewer::play(const std::string& scene_path,
     MujocoViewer viewer(model.get(), data.get(), "ScLERP + RMRC | X: red, Y: green, Z: blue");
     if (!viewer.is_open()) return 1;
     viewer.pose_markers_ = {start, end};
+    viewer.set_overlay(overlay);
     if (!video_path.empty()) recordTrajectory(viewer, trajectory, video_path);
     const double start_time = glfwGetTime();
     while (viewer.is_open()) {
@@ -198,6 +202,30 @@ void MujocoViewer::draw_pose_marker(const Eigen::Matrix<double, 7, 1>& pose,
         mjvGeom* arrow = &scn_.geoms[scn_.ngeom++];
         mjv_initGeom(arrow, mjGEOM_ARROW, nullptr, nullptr, nullptr, colors[axis]);
         mjv_connector(arrow, mjGEOM_ARROW, 0.004, position.data(), tip.data());
+    }
+}
+
+void MujocoViewer::set_overlay(const std::vector<SceneObstacle>& boxes) {
+    overlay_ = boxes;
+    if (window_) make_scene(kSceneGeoms + static_cast<int>(overlay_.size()));
+}
+
+void MujocoViewer::draw_overlay() {
+    const float blue[4] = {0.15f, 0.45f, 1.0f, 0.35f};
+    for (const SceneObstacle& box : overlay_) {
+        if (scn_.ngeom >= scn_.maxgeom) return;
+        const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rotation = box.rotation;
+        mjv_initGeom(&scn_.geoms[scn_.ngeom++], mjGEOM_BOX, box.size.data(),
+                     box.center.data(), rotation.data(), blue);
+    }
+}
+
+void MujocoViewer::make_scene(int max_geoms) {
+    mjv_freeScene(&scn_);
+    mjv_makeScene(m_, &scn_, max_geoms);
+    if (kLightweightRendering) {
+        scn_.flags[mjRND_SHADOW] = 0;
+        scn_.flags[mjRND_REFLECTION] = 0;
     }
 }
 
@@ -240,13 +268,9 @@ MujocoViewer::MujocoViewer(mjModel* model, mjData* data, const std::string& titl
     mjv_defaultScene(&scn_);
     mjr_defaultContext(&con_);
 
-    // Allocate scene geometry buffers (max 2000 geoms) and OpenGL context
-    mjv_makeScene(m_, &scn_, 2000);
+    // Allocate scene geometry buffers and OpenGL context
+    make_scene(kSceneGeoms);
     mjr_makeContext(m_, &con_, mjFONTSCALE_150);
-    if (kLightweightRendering) {
-        scn_.flags[mjRND_SHADOW] = 0;
-        scn_.flags[mjRND_REFLECTION] = 0;
-    }
 
     // Set initial camera perspective
     cam_.type = mjCAMERA_FREE;
@@ -291,6 +315,7 @@ void MujocoViewer::render(Frame* capture) {
         draw_pose_marker(pose_markers_[0], "Start");
         draw_pose_marker(pose_markers_[1], "End");
     }
+    draw_overlay();
 
     // Render scene into OpenGL frame buffer
     mjr_render(viewport, &scn_, &con_);

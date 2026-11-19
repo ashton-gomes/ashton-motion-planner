@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gplanner/obstacles.hpp"
 #include "gplanner/robot_config.hpp"
 #include "gplanner/rrt_star.hpp"
 
@@ -48,11 +49,14 @@ struct PathValidation {
 // Owns reusable kinematic/collision models. Planning has no UI or file output.
 class MotionPlanner {
 public:
-    // scene_xml must contain the robot's model, e.g. through <include>.
-    // edit_scene, if set, is applied to each copy of the scene the planner loads.
+    // scene_xml must contain the robot's model, e.g. through <include>. It also
+    // gives the task (its optional "start" and "goal" keyframes). obstacles
+    // says where obstacles come from: by default, the scene's own geoms. With
+    // ObstacleSource::PointCloud the planner starts with no obstacles until
+    // setPointCloud is called.
     MotionPlanner(const RobotConfig& robot, const std::string& scene_xml,
                   const RRTStarSettings& settings = {},
-                  const SceneEditor& edit_scene = {});
+                  const ObstacleOptions& obstacles = {});
     ~MotionPlanner();
     const RobotConfig& robot() const;
     // Number of planned joints.
@@ -67,6 +71,18 @@ public:
     // Fixed goal from the scene's "goal" keyframe, or nullopt for random-goal scenes.
     const std::optional<Pose>& sceneGoal() const;
     Pose sampleGoal();
+
+    // Planned-joint values at the planning start (the pose of homePose()).
+    Eigen::VectorXd startJoints() const;
+
+    // ObstacleSource::PointCloud only: replace the obstacles with this cloud,
+    // which must have been captured with the robot at startJoints(). Points
+    // on the robot itself are removed. Call again for a new capture.
+    void setPointCloud(const PointCloud& cloud);
+
+    // The obstacles the planner currently plans around: the scene's geoms, or
+    // the voxel boxes from the last point cloud. Clearance is not included.
+    const std::vector<SceneObstacle>& obstacles() const;
     PlanResult plan(const Pose& goal, PlannerMode mode);
     // Dense checks of playback, including joint limits and independent MuJoCo FK.
     PathValidation validatePath(const PlanResult& result, const Pose& goal,

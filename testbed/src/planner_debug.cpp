@@ -51,7 +51,8 @@ int debugPlannerFailure(
     const std::string& scene_path,
     const Eigen::Matrix<double, 7, 1>& goal,
     int frames_per_edge,
-    const std::function<Eigen::VectorXd(const Eigen::VectorXd&)>& to_scene_qpos)
+    const std::function<Eigen::VectorXd(const Eigen::VectorXd&)>& to_scene_qpos,
+    const std::vector<SceneObstacle>& overlay)
 {
     std::cerr << "Planner failed: " << reason << '\n'
               << "Expansions attempted: " << stats.expansions
@@ -77,7 +78,7 @@ int debugPlannerFailure(
 
     std::vector<Eigen::VectorXd> playback = buildTreeDebugTrajectory(tree, frames_per_edge);
     for (auto& joints : playback) joints = to_scene_qpos(joints);
-    if (MujocoViewer::play(scene_path, playback, tree.front().pose, goal) != 0) {
+    if (MujocoViewer::play(scene_path, playback, tree.front().pose, goal, "", overlay) != 0) {
         std::cerr << "Could not open the planner debug playback.\n";
     }
     return 1;

@@ -1,4 +1,5 @@
 #include "gplanner/planner.hpp"
+#include "testbed/obstacle_mode.hpp"
 #include "testbed/robots.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <stdexcept>
 
 namespace {
@@ -36,6 +38,7 @@ struct Options {
     int max_expansions = 1000;
     int validation_checks = 240;
     std::string condition = "all";
+    std::string obstacles = "known";
     std::filesystem::path output = "benchmark-results";
 };
 
@@ -58,7 +61,11 @@ Options parseOptions(int argc, char** argv) {
                          "                              sampled_wall_hole|sampled_long_cylinders|\n"
                          "                              sampled_under_table|sampled_shelf]\n"
                          "                 [--max-expansions 1000] [--validation-checks 240]\n"
-                         "Runs N trials per selected condition; all = 7N trials. Existing CSVs are preserved.\n";
+                         "                 [--obstacles known|sensed|both]\n"
+                         "Runs N trials per selected condition; all = 7N trials. Existing CSVs are preserved.\n"
+                         "--obstacles: plan around the scene's known geometry, a simulated depth-camera\n"
+                         "point cloud, or both (paired: same goals and seeds). Paths are always validated\n"
+                         "against the scene's true geometry.\n";
             std::exit(0);
         }
         if (i + 1 == argc) throw std::invalid_argument("Missing value for " + key);
@@ -70,6 +77,7 @@ Options parseOptions(int argc, char** argv) {
         else if (key == "--validation-checks") options.validation_checks = number(value, int_max);
         else if (key == "--output") options.output = value;
         else if (key == "--condition") options.condition = value;
+        else if (key == "--obstacles") options.obstacles = value;
         else throw std::invalid_argument("Unknown option: " + key);
     }
     if (static_cast<unsigned long long>(options.seed) + options.trials - 1 > UINT32_MAX)
@@ -77,6 +85,8 @@ Options parseOptions(int argc, char** argv) {
     if (options.condition != "all" && std::none_of(conditions.begin(), conditions.end(),
         [&](const Condition& c) { return c.name == options.condition; }))
         throw std::invalid_argument("Unknown condition: " + options.condition);
+    if (options.obstacles != "known" && options.obstacles != "sensed" && options.obstacles != "both")
+        throw std::invalid_argument("Unknown --obstacles value: " + options.obstacles);
     return options;
 }
 
@@ -131,84 +141,127 @@ int main(int argc, char** argv) {
                  << "\nobstacle_sample_attempts," << settings.obstacle_sample_attempts
                  << "\nvalidation_checks_per_edge," << options.validation_checks
                  << "\nposition_tolerance_m,0.001\nrotation_tolerance_rad,0.001"
-                    "\nrmrc_beta,0.1\nrandomize_cylinders,0\n";
+                    "\nrmrc_beta,0.1\nrandomize_cylinders,0"
+                 << "\nobstacles," << options.obstacles;
+        std::vector<ObstacleMode> modes;
+        if (options.obstacles != "sensed") modes.push_back(ObstacleMode::KnownGeometry);
+        if (options.obstacles != "known") modes.push_back(ObstacleMode::SimulatedSensor);
+        const PointCloudSettings cloud_settings =
+            obstacleOptions(ObstacleMode::SimulatedSensor).point_cloud;
+        if (options.obstacles != "known") {
+            metadata << "\nvoxel_size_m," << cloud_settings.voxel_size
+                     << "\nmin_points_per_voxel," << cloud_settings.min_points_per_voxel
+                     << "\nfloor_height_m," << cloud_settings.floor_height
+                     << "\ncrop_margin_m," << cloud_settings.crop_margin
+                     << "\nself_filter_padding_m," << cloud_settings.self_filter_padding;
+            for (const DepthCameraSettings& camera : test_robot.cameras)
+                metadata << "\ncamera_" << camera.name << ",\"pos " << camera.position.transpose()
+                         << " look_at " << camera.look_at.transpose() << " fov " << camera.horizontal_fov_deg
+                         << "x" << camera.vertical_fov_deg << " res " << camera.width << "x" << camera.height
+                         << " range " << camera.min_range << "-" << camera.max_range
+                         << " noise " << camera.noise_base << "+" << camera.noise_per_m2
+                         << "d^2 dropout " << camera.dropout << '"';
+        }
+        metadata << '\n';
         metadata.flush();
-        trials << "condition,scene,trial,seed,success,valid_path_success,failure_reason,planning_seconds,"
+        trials << "condition,scene,obstacles,trial,seed,success,valid_path_success,failure_reason,planning_seconds,"
                   "nodes,expansions,position_error_m,rotation_error_rad,joint_limits_ok,collision_free,"
                   "validated_position_error_m,validated_rotation_error_rad,no_progress,non_finite,"
                   "self_collision,obstacle_collision,rmrc_not_converged,joint_path_collision,joint_limit,"
                   "goal_x,goal_y,goal_z,goal_w,goal_qx,goal_qy,goal_qz\n";
-        summary << "condition,scene,trials,successes,success_rate_percent,valid_paths,"
-                   "valid_path_rate_percent,mean_planning_seconds\n";
+        summary << "condition,scene,obstacles,trials,successes,success_rate_percent,valid_paths,"
+                   "valid_path_rate_percent,mean_planning_seconds,obstacle_boxes,cloud_points\n";
         for (const auto& condition : conditions) {
             if (options.condition != "all" && options.condition != condition.name) continue;
             // Models are loaded once per fixed scene; all per-trial randomness
             // is reset before sampling the goal. Empty-space tasks are paired.
             // This robot's version of the scene, e.g. g1_wall_hole.xml.
             const std::string scene = test_robot.environment_prefix + condition.scene;
+            const std::string scene_path = (std::filesystem::path(ENVIRONMENTS_PATH) / scene).string();
             seedSampling(options.seed);
             seedRRTSampling(options.seed);
-            MotionPlanner planner(robot,
-                (std::filesystem::path(ENVIRONMENTS_PATH) / scene).string(), settings);
-            Summary totals;
+            // The true scene: known-geometry planning, every goal, and every
+            // path validation, so sensed results are judged against reality.
+            MotionPlanner truth(robot, scene_path, settings);
+            std::unique_ptr<MotionPlanner> sensed;
+            size_t cloud_points = 0;
+            if (options.obstacles != "known") {
+                sensed = std::make_unique<MotionPlanner>(robot, scene_path, settings,
+                    obstacleOptions(ObstacleMode::SimulatedSensor));
+                cloud_points = senseObstacles(*sensed, test_robot, scene_path, {}, options.seed).points.size();
+            }
+            std::map<ObstacleMode, Summary> totals;
             for (int trial = 0; trial < options.trials; ++trial) {
                 const std::uint32_t seed = options.seed + static_cast<std::uint32_t>(trial);
-                seedSampling(seed);
-                seedRRTSampling(seed);
-                Pose goal;
-                bool goal_sampled = false;
-                PlanResult result;
-                PathValidation validation;
-                try {
-                    goal = planner.sceneGoal() ? *planner.sceneGoal() : planner.sampleGoal();
-                    goal_sampled = true;
-                    result = planner.plan(goal, condition.mode);
-                    validation = planner.validatePath(result, goal, options.validation_checks);
-                } catch (const std::exception& error) {
-                    result.success = false;
-                    result.failure_reason = std::string(goal_sampled ? "trial_error: " : "goal_sampling: ") + error.what();
-                }
-                ++totals.trials;
-                totals.successes += result.success;
-                totals.valid_paths += validation.valid;
-                totals.seconds += result.planning_seconds;
-                if (!result.success) ++totals.failures[result.failure_reason];
-                const auto& s = result.stats;
-                trials << condition.name << ',' << scene << ',' << trial + 1 << ',' << seed << ','
-                       << result.success << ',' << validation.valid << ',' << csv(result.failure_reason) << ','
-                       << result.planning_seconds << ',' << result.tree.size() << ',' << s.expansions << ',';
-                if (goal_sampled) trials << result.position_error << ',' << result.rotation_error;
-                else trials << ',';
-                trials << ',';
-                // Leave validation fields empty when no complete path exists.
-                if (result.success) trials << validation.joint_limits_ok << ',' << validation.collision_free
-                    << ',' << validation.position_error << ',' << validation.rotation_error;
-                else trials << ",,,";
-                trials << ',' << s.no_progress << ',' << s.non_finite << ',' << s.self_collision << ','
-                       << s.obstacle_collision << ',' << s.rmrc_not_converged << ',' << s.joint_path_collision
-                       << ',' << s.joint_limit;
-                for (int i = 0; i < 7; ++i) {
+                for (const ObstacleMode mode : modes) {
+                    MotionPlanner& planner = mode == ObstacleMode::KnownGeometry ? truth : *sensed;
+                    Summary& total = totals[mode];
+                    seedSampling(seed);
+                    seedRRTSampling(seed);
+                    Pose goal;
+                    bool goal_sampled = false;
+                    PlanResult result;
+                    PathValidation validation;
+                    try {
+                        goal = truth.sceneGoal() ? *truth.sceneGoal() : truth.sampleGoal();
+                        goal_sampled = true;
+                        result = planner.plan(goal, condition.mode);
+                        validation = truth.validatePath(result, goal, options.validation_checks);
+                    } catch (const std::exception& error) {
+                        result.success = false;
+                        result.failure_reason = std::string(goal_sampled ? "trial_error: " : "goal_sampling: ") + error.what();
+                    }
+                    ++total.trials;
+                    total.successes += result.success;
+                    total.valid_paths += validation.valid;
+                    total.seconds += result.planning_seconds;
+                    if (!result.success) ++total.failures[result.failure_reason];
+                    const auto& s = result.stats;
+                    trials << condition.name << ',' << scene << ',' << obstacleModeName(mode) << ','
+                           << trial + 1 << ',' << seed << ','
+                           << result.success << ',' << validation.valid << ',' << csv(result.failure_reason) << ','
+                           << result.planning_seconds << ',' << result.tree.size() << ',' << s.expansions << ',';
+                    if (goal_sampled) trials << result.position_error << ',' << result.rotation_error;
+                    else trials << ',';
                     trials << ',';
-                    if (goal_sampled) trials << goal[i];
+                    // Leave validation fields empty when no complete path exists.
+                    if (result.success) trials << validation.joint_limits_ok << ',' << validation.collision_free
+                        << ',' << validation.position_error << ',' << validation.rotation_error;
+                    else trials << ",,,";
+                    trials << ',' << s.no_progress << ',' << s.non_finite << ',' << s.self_collision << ','
+                           << s.obstacle_collision << ',' << s.rmrc_not_converged << ',' << s.joint_path_collision
+                           << ',' << s.joint_limit;
+                    for (int i = 0; i < 7; ++i) {
+                        trials << ',';
+                        if (goal_sampled) trials << goal[i];
+                    }
+                    trials << '\n';
+                    trials.flush();
+                    if (!trials) throw std::runtime_error("Failed writing trial results.");
+                    if ((trial + 1) % 25 == 0 || trial + 1 == options.trials)
+                        std::cout << condition.name << " (" << obstacleModeName(mode) << "): " << trial + 1
+                                  << '/' << options.trials << ", goal reached " << total.successes
+                                  << ", valid paths " << total.valid_paths << std::endl;
                 }
-                trials << '\n';
-                trials.flush();
-                if (!trials) throw std::runtime_error("Failed writing trial results.");
-                if ((trial + 1) % 25 == 0 || trial + 1 == options.trials)
-                    std::cout << condition.name << ": " << trial + 1 << '/' << options.trials
-                              << ", goal reached " << totals.successes << ", valid paths "
-                              << totals.valid_paths << std::endl;
             }
-            const double rate = 100.0 * totals.successes / totals.trials;
-            const double valid_rate = 100.0 * totals.valid_paths / totals.trials;
-            summary << condition.name << ',' << scene << ',' << totals.trials << ','
-                    << totals.successes << ',' << rate << ',' << totals.valid_paths << ','
-                    << valid_rate << ',' << totals.seconds / totals.trials << '\n';
-            summary.flush();
-            if (!summary) throw std::runtime_error("Failed writing summary.");
-            std::cout << condition.name << ": success " << rate << "%, validated paths " << valid_rate << "%\n";
-            for (const auto& [reason, count] : totals.failures)
-                std::cout << "  " << reason << ": " << count << '\n';
+            for (const ObstacleMode mode : modes) {
+                const Summary& total = totals[mode];
+                const MotionPlanner& planner = mode == ObstacleMode::KnownGeometry ? truth : *sensed;
+                const double rate = 100.0 * total.successes / total.trials;
+                const double valid_rate = 100.0 * total.valid_paths / total.trials;
+                summary << condition.name << ',' << scene << ',' << obstacleModeName(mode) << ','
+                        << total.trials << ',' << total.successes << ',' << rate << ','
+                        << total.valid_paths << ',' << valid_rate << ',' << total.seconds / total.trials
+                        << ',' << planner.obstacles().size() << ',';
+                if (mode == ObstacleMode::SimulatedSensor) summary << cloud_points;
+                summary << '\n';
+                summary.flush();
+                if (!summary) throw std::runtime_error("Failed writing summary.");
+                std::cout << condition.name << " (" << obstacleModeName(mode) << "): success " << rate
+                          << "%, validated paths " << valid_rate << "%\n";
+                for (const auto& [reason, count] : total.failures)
+                    std::cout << "  " << reason << ": " << count << '\n';
+            }
         }
         std::cout << "Results saved to " << options.output << '\n';
         return 0; // Individual planner failures are benchmark data, not runner errors.

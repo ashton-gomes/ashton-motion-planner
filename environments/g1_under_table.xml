@@ -12,12 +12,13 @@
     </default>
   </default>
   <worldbody>
-    <!-- Tabletop: x = 0.17..0.57, y = -0.45..0.40, z = 0.97..1.00. Legs at the corners. -->
-    <geom name="table_top" class="table" pos="0.37 -0.025 0.985" size="0.20 0.425 0.015"/>
-    <geom name="table_leg_1" class="table" pos="0.19 -0.43 0.485" size="0.02 0.02 0.485"/>
-    <geom name="table_leg_2" class="table" pos="0.19 0.38 0.485" size="0.02 0.02 0.485"/>
-    <geom name="table_leg_3" class="table" pos="0.55 -0.43 0.485" size="0.02 0.02 0.485"/>
-    <geom name="table_leg_4" class="table" pos="0.55 0.38 0.485" size="0.02 0.02 0.485"/>
+    <!-- Tabletop: x = 0.17..0.57, y = -0.45..0.40, z = 0.96..0.99. Legs at the corners.
+         (Lowered 1 cm so the start keeps the planner's 2 cm clearance above it.) -->
+    <geom name="table_top" class="table" pos="0.37 -0.025 0.975" size="0.20 0.425 0.015"/>
+    <geom name="table_leg_1" class="table" pos="0.19 -0.43 0.48" size="0.02 0.02 0.48"/>
+    <geom name="table_leg_2" class="table" pos="0.19 0.38 0.48" size="0.02 0.02 0.48"/>
+    <geom name="table_leg_3" class="table" pos="0.55 -0.43 0.48" size="0.02 0.02 0.48"/>
+    <geom name="table_leg_4" class="table" pos="0.55 0.38 0.48" size="0.02 0.02 0.48"/>
   </worldbody>
   <!-- Fixed task for the right arm. Each keyframe is the full G1 pose:
        floating base (7), legs and waist (15), left arm (7, hanging at the side), right arm (7).

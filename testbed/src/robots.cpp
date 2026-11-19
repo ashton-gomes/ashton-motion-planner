@@ -25,6 +25,16 @@ std::vector<std::string> g1ArmJoints(const std::string& side) {
     return joints;
 }
 
+// Head-mounted camera, about where the G1's own depth camera sits: just in
+// front of the face, tilted about 35 degrees down toward the arm's side.
+DepthCameraSettings g1HeadCamera(double side) {
+    DepthCameraSettings camera;
+    camera.name = "g1_head";
+    camera.position = {0.09, 0.0, 1.24};
+    camera.look_at = {0.45, 0.10 * side, 0.99};
+    return camera;
+}
+
 }  // namespace
 
 TestRobot kinovaGen3() {
@@ -35,6 +45,13 @@ TestRobot kinovaGen3() {
     robot.tool_body = "bracelet_link";
     // joint_names left empty: the model contains only the arm's 7 joints.
     // home_joints left empty: the model's "home" keyframe is used.
+    // A fixed camera behind and above the base, looking over the arm at the
+    // work area in front of it.
+    DepthCameraSettings camera;
+    camera.name = "overhead_rear";
+    camera.position = {-0.70, 0.0, 1.30};
+    camera.look_at = {0.35, 0.0, 0.35};
+    test_robot.cameras = {camera};
     return test_robot;
 }
 
@@ -55,6 +72,7 @@ TestRobot g1RightArm() {
     test_robot.environment_prefix = "g1_";  // environments/g1_*.xml
     // The model draws the hands but gives them no collision shape.
     robot.visual_collision_meshes = {"right_rubber_hand", "left_rubber_hand"};
+    test_robot.cameras = {g1HeadCamera(-1.0)};
     return test_robot;
 }
 
@@ -70,6 +88,7 @@ TestRobot g1LeftArm() {
     robot.held_joints = {{"right_shoulder_roll_joint", -0.3}, {"right_elbow_joint", 1.5}};
     // The g1_ environments are laid out for the right arm, so none is set here.
     robot.visual_collision_meshes = {"right_rubber_hand", "left_rubber_hand"};
+    test_robot.cameras = {g1HeadCamera(1.0)};
     return test_robot;
 }
 

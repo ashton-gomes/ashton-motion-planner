@@ -1,5 +1,7 @@
 #include "gplanner/planner.hpp"
+#include "testbed/obstacle_mode.hpp"
 #include "testbed/robots.hpp"
+#include "testbed/sensor.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -37,6 +39,104 @@ void checkEnvironments() {
     }
 }
 
+// Voxel boxes must cover exactly the occupied voxels, merged where possible.
+void checkVoxelization() {
+    PointCloudSettings settings;
+    settings.voxel_size = 0.02;
+    PointCloud plane;  // A 3 x 3 patch of voxels, one point each.
+    for (int x = 0; x < 3; ++x)
+        for (int y = 0; y < 3; ++y) plane.points.emplace_back(0.01 + 0.02 * x, 0.01 + 0.02 * y, 0.51);
+    const auto boxes = voxelizePointCloud(plane, settings);
+    require(boxes.size() == 1 && boxes[0].size.isApprox(Eigen::Vector3d(0.03, 0.03, 0.01)) &&
+            boxes[0].center.isApprox(Eigen::Vector3d(0.03, 0.03, 0.51)),
+            "A full 3 x 3 voxel patch must merge into one box.");
+
+    PointCloud shape;  // An L of 3 + 2 voxels, plus a lone noise point.
+    for (const Eigen::Vector3d p : {Eigen::Vector3d(0.01, 0.01, 0.01), Eigen::Vector3d(0.03, 0.01, 0.01),
+                                    Eigen::Vector3d(0.05, 0.01, 0.01), Eigen::Vector3d(0.01, 0.03, 0.01),
+                                    Eigen::Vector3d(0.01, 0.05, 0.01)}) {
+        shape.points.push_back(p);
+        shape.points.push_back(p + Eigen::Vector3d::Constant(0.001));  // two points per voxel
+    }
+    shape.points.emplace_back(0.51, 0.51, 0.51);
+    settings.min_points_per_voxel = 2;
+    double volume = 0.0;
+    const auto l_boxes = voxelizePointCloud(shape, settings);
+    for (const auto& box : l_boxes) volume += 8 * box.size.prod();
+    require(std::abs(volume - 5 * std::pow(0.02, 3)) < 1e-12,
+            "Merged boxes must cover exactly the voxels with enough points.");
+    for (size_t i = 0; i + 1 < shape.points.size(); ++i)
+        require(isPointInsideObstacle(shape.points[i], l_boxes), "Every kept point must be inside a box.");
+    require(!isPointInsideObstacle(shape.points.back(), l_boxes), "A lone noise point must be dropped.");
+}
+
+// Sensed obstacles: the simulated cameras, floor cropping, robot self-filter,
+// and planning against the sensed cloud, judged against the true scene.
+void checkPointClouds() {
+    const auto scene_path = [](const std::string& name) {
+        return (std::filesystem::path(ENVIRONMENTS_PATH) / name).string();
+    };
+    {
+        MotionPlanner known(robots::kinovaGen3().config, scene_path("empty.xml"));
+        bool rejected = false;
+        try { known.setPointCloud({}); } catch (const std::logic_error&) { rejected = true; }
+        require(rejected, "setPointCloud must be rejected for a known-geometry planner.");
+    }
+    {
+        const auto robot = robots::kinovaGen3();
+        SimulatedDepthSensor a(scene_path("wall_hole.xml"), robot.cameras, {}, 3);
+        SimulatedDepthSensor b(scene_path("wall_hole.xml"), robot.cameras, {}, 3);
+        SimulatedDepthSensor c(scene_path("wall_hole.xml"), robot.cameras, {}, 4);
+        const PointCloud first = a.capture(), second = b.capture(), other = c.capture();
+        require(!first.points.empty() && first.points.size() == second.points.size(),
+                "The simulated sensor must return points, reproducibly.");
+        for (size_t i = 0; i < first.points.size(); ++i)
+            require(first.points[i] == second.points[i], "The same sensor seed must give the same cloud.");
+        require(first.points.size() != other.points.size() || first.points[0] != other.points[0],
+                "A different sensor seed must change the noise.");
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(ENVIRONMENTS_PATH)) {
+        if (entry.path().extension() != ".xml") continue;
+        const std::string name = entry.path().filename().string();
+        const bool g1 = name.rfind("g1_", 0) == 0;
+        const robots::TestRobot robot = g1 ? robots::g1RightArm() : robots::kinovaGen3();
+        seedSampling(1);
+        MotionPlanner truth(robot.config, entry.path().string());
+        MotionPlanner sensed(robot.config, entry.path().string(), {},
+                             obstacleOptions(ObstacleMode::SimulatedSensor));
+        const PointCloud cloud = senseObstacles(sensed, robot, entry.path().string());
+        require(!cloud.points.empty(), name + ": the cameras must see something.");
+        // The robot sees itself and the floor; neither may become an obstacle.
+        const auto start = sensed.plan(sensed.homePose(), PlannerMode::DirectScLERP);
+        require(start.success, name + ": the start must stay free after removing the robot's own points, got '" +
+                start.failure_reason + "'.");
+        if (truth.obstacles().empty()) {
+            require(sensed.obstacles().empty(), name + ": an empty scene must give no sensed obstacles.");
+            continue;
+        }
+        require(!sensed.obstacles().empty(), name + ": the cameras must see the scene's obstacles.");
+        // Every sensed box lies on a real obstacle (within noise and voxel size).
+        std::vector<SceneObstacle> nearby = truth.obstacles();
+        for (auto& obstacle : nearby) obstacle.safety_clearance = 0.05;
+        size_t on_obstacle = 0;
+        for (const auto& box : sensed.obstacles()) on_obstacle += isPointInsideObstacle(box.center, nearby);
+        require(on_obstacle >= 0.95 * sensed.obstacles().size(),
+                name + ": sensed boxes must lie on the scene's real obstacles.");
+    }
+    // Plan around the sensed cloud and validate against the true scene.
+    const auto robot = robots::kinovaGen3();
+    MotionPlanner truth(robot.config, scene_path("random_cylinders.xml"));
+    MotionPlanner sensed(robot.config, scene_path("random_cylinders.xml"), {},
+                         obstacleOptions(ObstacleMode::SimulatedSensor));
+    senseObstacles(sensed, robot, scene_path("random_cylinders.xml"));
+    seedSampling(1);
+    seedRRTSampling(1);
+    const Pose goal = truth.sampleGoal();
+    const auto result = sensed.plan(goal, PlannerMode::SampledScLERP);
+    require(result.success && truth.validatePath(result, goal).valid,
+            "A seeded plan around sensed cylinders must reach the goal and be valid in the true scene.");
+}
+
 // Plan with one arm of the G1 humanoid while its legs, waist, and other arm
 // are held still, in the obstacle-free G1 environment.
 void checkG1Arms() {
@@ -72,6 +172,8 @@ void checkG1Arms() {
 int main() {
     try {
         checkEnvironments();
+        checkVoxelization();
+        checkPointClouds();
         checkG1Arms();
         seedSampling(1);
         seedRRTSampling(1);

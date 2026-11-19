@@ -7,6 +7,8 @@
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
 
+#include "gplanner/sampler.hpp"
+
 class MujocoViewer {
 public:
     MujocoViewer(mjModel* model, mjData* data, const std::string& title = "Robot Viewer", int width = 1200, int height = 900);
@@ -15,11 +17,17 @@ public:
     // Load a scene and loop the joint trajectory with start/end coordinate frames.
     // Poses use [x, y, z, qw, qx, qy, qz]. Returns 1 if loading/opening fails.
     // If video_path is set, the first pass of the trajectory is also saved there.
+    // overlay boxes (e.g. MotionPlanner::obstacles() from a point cloud) are
+    // drawn as translucent blue boxes over the scene.
     static int play(const std::string& scene_path,
                     const std::vector<Eigen::VectorXd>& trajectory,
                     const Eigen::Matrix<double, 7, 1>& start,
                     const Eigen::Matrix<double, 7, 1>& end,
-                    const std::string& video_path = "");
+                    const std::string& video_path = "",
+                    const std::vector<SceneObstacle>& overlay = {});
+
+    // Boxes drawn over the scene every frame.
+    void set_overlay(const std::vector<SceneObstacle>& boxes);
 
     // Check if the window is still open
     bool is_open() const;
@@ -44,6 +52,9 @@ public:
 private:
     std::vector<Eigen::Matrix<double, 7, 1>> pose_markers_;
     void draw_pose_marker(const Eigen::Matrix<double, 7, 1>& pose, const char* label);
+    std::vector<SceneObstacle> overlay_;
+    void draw_overlay();
+    void make_scene(int max_geoms);
 
     // GLFW Window Pointer
     GLFWwindow* window_ = nullptr;

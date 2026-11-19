@@ -71,6 +71,7 @@ The `RobotConfig` fields ([planner/include/gplanner/robot_config.hpp](../planner
 | Field | What it is | If left empty |
 |---|---|---|
 | `environment_prefix` | Prefix of this robot's environment files, e.g. `"g1_"` → `g1_wall_hole.xml` | the plain (Kinova) files |
+| `cameras` | Simulated depth cameras (`DepthCameraSettings`: pose, field of view, resolution, range, noise) used in sensor mode | none; sensor mode then fails with an error |
 
 The planner reads everything else from the model file: joint axes, joint
 positions, joint limits, and arm length (for the sampling workspace). Joint

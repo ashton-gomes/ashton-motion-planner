@@ -10,6 +10,8 @@
 #include <mujoco/mujoco.h>
 #include "gplanner/planner.hpp"
 #include "gplanner/rrt_star.hpp"
+#include "voxel_grid.hpp"
+#include <functional>
 #include <chrono>
 #include <array>
 #include <limits>
@@ -516,10 +518,12 @@ using DataPtr = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
 // Loads a model. Every geom using one of visual_collision_meshes gets a
 // collision copy (same mesh, pose, and body; hidden in group 3), so parts the
 // model only draws, like the G1's hands, also count in collision checks.
+// edit_spec, if set, can change the parsed model before it is compiled.
 ModelPtr loadModel(const std::string& path, const std::string& what,
-                   const std::vector<std::string>& visual_collision_meshes = {}) {
+                   const std::vector<std::string>& visual_collision_meshes = {},
+                   const std::function<void(mjSpec*)>& edit_spec = {}) {
     char error[1000]{};
-    if (visual_collision_meshes.empty()) {
+    if (visual_collision_meshes.empty() && !edit_spec) {
         ModelPtr model(mj_loadXML(path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
         if (!model) throw std::runtime_error(what + " load error (" + path + "): " + error);
         return model;
@@ -548,6 +552,7 @@ ModelPtr loadModel(const std::string& path, const std::string& what,
         copy->density = 0;  // collision only; leave the body's mass alone
         copy->group = 3;
     }
+    if (edit_spec) edit_spec(spec.get());
     ModelPtr model(mj_compile(spec.get(), nullptr), mj_deleteModel);
     if (!model)
         throw std::runtime_error(what + " compile error (" + path + "): " + mjs_getError(spec.get()));
@@ -910,12 +915,19 @@ private:
 // scene.xml.  The obstacle margin is enlarged for a conservative path.
 class ObstacleCollisionChecker {
 public:
+    // Obstacles are the scene's own geoms (ObstacleSource::KnownScene).
     ObstacleCollisionChecker(const std::string& scene_path, const RobotModel& robot,
                              double clearance, const SceneEditor& edit_scene)
-        : model_(loadModel(scene_path, "Scene collision", robot.visual_collision_meshes)),
-          data_(nullptr, mj_deleteData) {
-        if (edit_scene) edit_scene(model_.get());
-        binding_ = bindChain(model_.get(), robot, "Scene " + scene_path);
+        : ObstacleCollisionChecker(
+              editedModel(loadModel(scene_path, "Scene collision", robot.visual_collision_meshes),
+                          edit_scene),
+              robot, clearance, "Scene " + scene_path) {}
+
+    // Obstacles are whatever non-robot geoms model has, e.g. sensed voxel boxes.
+    ObstacleCollisionChecker(ModelPtr model, const RobotModel& robot, double clearance,
+                             const std::string& model_label)
+        : model_(std::move(model)), data_(nullptr, mj_deleteData) {
+        binding_ = bindChain(model_.get(), robot, model_label);
         // A geom belongs to the robot if its body is one of the robot's bodies.
         robot_geom_.resize(model_->ngeom);
         obstacle_geom_.resize(model_->ngeom);
@@ -933,6 +945,11 @@ public:
             }
         }
         onlyRobotObstaclePairs();
+        // The clearance is added to the margins after compiling, but MuJoCo's
+        // midphase culls geom pairs with bounding volumes from compile time,
+        // so it misses some contacts inside the clearance. Without it, every
+        // pair the broadphase finds is checked with the full margin.
+        model_->opt.disableflags |= mjDSBL_MIDPHASE;
         data_ = makeData(model_.get(), "scene collision");
     }
 
@@ -952,9 +969,35 @@ public:
         return false;
     }
 
+    // Every obstacle geom within the clearance of the robot at these joints.
+    std::vector<bool> obstacleGeomsTouchingRobot(const JointVector& joints) {
+        binding_.write(joints, data_.get());
+        mj_kinematics(model_.get(), data_.get());
+        mj_collision(model_.get(), data_.get());
+        std::vector<bool> touching(model_->ngeom, false);
+        for (int i = 0; i < data_->ncon; ++i) {
+            const mjContact& contact = data_->contact[i];
+            if (isRobotCollisionGeom(contact.geom1) && isObstacleGeom(contact.geom2))
+                touching[contact.geom2] = true;
+            if (isRobotCollisionGeom(contact.geom2) && isObstacleGeom(contact.geom1))
+                touching[contact.geom1] = true;
+        }
+        // A full contact buffer means some nearby geoms were not reported.
+        if (data_->warning[mjWARN_CONTACTFULL].number > 0)
+            throw std::runtime_error("Too many contacts near the robot to check; "
+                                     "reduce the self-filter padding or obstacle clearance.");
+        return touching;
+    }
+
+    const mjModel* model() const { return model_.get(); }
     const ChainBinding& binding() const { return binding_; }
 
 private:
+    static ModelPtr editedModel(ModelPtr model, const SceneEditor& edit_scene) {
+        if (edit_scene) edit_scene(model.get());
+        return model;
+    }
+
     bool isRobotCollisionGeom(int geom) const {
         return robot_geom_[geom];
     }
@@ -985,6 +1028,43 @@ private:
     std::vector<bool> robot_geom_;
     std::vector<bool> obstacle_geom_; // decided once, before the masks change
 };
+
+// Name of the body that holds sensed obstacle boxes in the robot model.
+constexpr const char* kSensedObstacleBody = "gplanner_sensed_obstacles";
+
+// The robot's own model plus one box geom per obstacle, all on one body so
+// the boxes are never checked against each other. With movable = true the
+// body gets a free joint, so the boxes are also checked against parts of the
+// robot fixed to the world (e.g. the Kinova base); MuJoCo skips contacts
+// between two bodies that are both fixed to the world. That is only wanted
+// when looking for voxels on the robot, not when planning.
+ModelPtr loadRobotWithBoxes(const RobotConfig& config, const RobotModel& robot,
+                            const std::vector<SceneObstacle>& boxes, bool movable) {
+    return loadModel(config.model_path, "Robot model with sensed obstacles",
+                     robot.visual_collision_meshes, [&](mjSpec* spec) {
+        if (boxes.empty()) return;
+        mjsBody* body = mjs_addBody(mjs_findBody(spec, "world"), nullptr);
+        mjs_setName(body->element, kSensedObstacleBody);
+        if (movable) {
+            mjs_addFreeJoint(body);
+            // Every voxel the robot sees on itself is a contact here.
+            spec->memory = std::max<mjtSize>(spec->memory, mjtSize(64) << 20);
+            // Keyframes would no longer match the larger qpos; none are needed.
+            std::vector<mjsElement*> keys;
+            for (mjsElement* key = mjs_firstElement(spec, mjOBJ_KEY); key;
+                 key = mjs_nextElement(spec, key))
+                keys.push_back(key);
+            for (mjsElement* key : keys) mjs_delete(spec, key);
+        }
+        for (const SceneObstacle& box : boxes) {
+            mjsGeom* geom = mjs_addGeom(body, nullptr);
+            geom->type = mjGEOM_BOX;
+            std::copy(box.size.data(), box.size.data() + 3, geom->size);
+            std::copy(box.center.data(), box.center.data() + 3, geom->pos);
+            geom->contype = geom->conaffinity = 1;
+        }
+    });
+}
 
 // Check the simple joint-space motion used to replay and rewire tree edges.
 bool isJointPathCollisionFree(
@@ -1029,22 +1109,81 @@ struct MotionPlanner::Impl {
     RobotConfig config;
     RobotModel robot;
     RRTStarSettings settings;
+    ObstacleOptions obstacle_options;
     SelfCollisionChecker self;
+    // Robot-vs-obstacle checks: the scene's geoms, or the robot's own model
+    // plus sensed voxel boxes (ObstacleSource::PointCloud).
     ObstacleCollisionChecker scene;
+    // Maps planned joints to the scene's full qpos (keyframes, viewer).
+    ChainBinding scene_binding;
     std::vector<SceneObstacle> obstacles;
     std::optional<Pose> fixed_goal;
     static constexpr double tolerance = 1e-3;
     static constexpr double beta = 0.1;
 
     Impl(const RobotConfig& robot_config, const std::string& scene_xml,
-         const RRTStarSettings& options, const SceneEditor& edit_scene)
+         const RRTStarSettings& options, const ObstacleOptions& obstacle_opts)
         : config(robot_config), robot(loadRobot(robot_config)), settings(options),
+          obstacle_options(obstacle_opts),
           self(robot_config.model_path, robot),
-          scene(scene_xml, robot, options.obstacle_clearance, edit_scene),
-          obstacles(loadSceneObstacles(scene_xml, options.obstacle_clearance, robot.body_names,
-                                       edit_scene)) {
+          scene(knownObstacles()
+              ? ObstacleCollisionChecker(scene_xml, robot, options.obstacle_clearance,
+                                         obstacle_opts.edit_scene)
+              : ObstacleCollisionChecker(loadRobotWithBoxes(config, robot, {}, false), robot,
+                                         options.obstacle_clearance, "Robot model")),
+          scene_binding(knownObstacles()
+              ? scene.binding()
+              : bindChain(loadModel(scene_xml, "Scene").get(), robot, "Scene " + scene_xml)),
+          obstacles(knownObstacles()
+              ? loadSceneObstacles(scene_xml, options.obstacle_clearance, robot.body_names,
+                                   obstacle_opts.edit_scene)
+              : std::vector<SceneObstacle>{}) {
         validateRRTSettings(settings);
         loadSceneTask(scene_xml);
+    }
+
+    bool knownObstacles() const {
+        return obstacle_options.source == ObstacleSource::KnownScene;
+    }
+
+    // Crop the cloud, group it into voxels, drop voxels on the robot at its
+    // start configuration, then rebuild the obstacle checker from the rest.
+    void setPointCloud(const PointCloud& cloud) {
+        const PointCloudSettings& cloud_settings = obstacle_options.point_cloud;
+        if (cloud_settings.crop_margin < 0.0 || cloud_settings.self_filter_padding < 0.0)
+            throw std::invalid_argument("Point-cloud crop margin and self-filter padding cannot be negative.");
+        PointCloud cropped;
+        const double reach = robot.workspace_outer_radius + cloud_settings.crop_margin;
+        for (const Eigen::Vector3d& point : cloud.points)
+            if (point.allFinite() && point.z() > cloud_settings.floor_height &&
+                (point - robot.workspace_center).norm() <= reach)
+                cropped.points.push_back(point);
+        std::vector<Eigen::Vector3i> cells = voxel_grid::occupiedCells(cropped, cloud_settings);
+
+        // Self-filter: one box per voxel, checked against the robot's
+        // collision geoms at the start configuration.
+        if (!cells.empty()) {
+            std::vector<SceneObstacle> voxels;
+            voxels.reserve(cells.size());
+            for (const auto& cell : cells)
+                voxels.push_back(voxel_grid::cellBox(cell, cloud_settings.voxel_size));
+            // Anything that would already block the start, plus the padding.
+            ObstacleCollisionChecker probe(loadRobotWithBoxes(config, robot, voxels, true), robot,
+                                           settings.obstacle_clearance + cloud_settings.self_filter_padding,
+                                           "Robot model");
+            const std::vector<bool> touching = probe.obstacleGeomsTouchingRobot(robot.home_qpos);
+            const mjModel* m = probe.model();
+            const int first = m->body_geomadr[mj_name2id(m, mjOBJ_BODY, kSensedObstacleBody)];
+            std::vector<Eigen::Vector3i> kept;
+            for (size_t i = 0; i < cells.size(); ++i)
+                if (!touching[first + static_cast<int>(i)]) kept.push_back(cells[i]);
+            cells = std::move(kept);
+        }
+
+        obstacles = voxel_grid::mergeCells(cells, cloud_settings.voxel_size);
+        for (SceneObstacle& box : obstacles) box.safety_clearance = settings.obstacle_clearance;
+        scene = ObstacleCollisionChecker(loadRobotWithBoxes(config, robot, obstacles, false), robot,
+                                         settings.obstacle_clearance, "Robot model");
     }
 
     // Optional fixed task from the scene: "start" replaces the robot's home
@@ -1053,9 +1192,9 @@ struct MotionPlanner::Impl {
         const auto joints = [&](const char* name) -> std::optional<JointVector> {
             const auto qpos = loadSceneKeyframe(scene_xml, name);
             if (!qpos) return std::nullopt;
-            if (qpos->size() != scene.binding().held_qpos.size()) throw std::runtime_error(
+            if (qpos->size() != scene_binding.held_qpos.size()) throw std::runtime_error(
                 std::string("Scene keyframe '") + name + "' has the wrong number of values.");
-            const JointVector q = scene.binding().extract(*qpos);
+            const JointVector q = scene_binding.extract(*qpos);
             if (!robot.withinJointLimits(q)) throw std::runtime_error(
                 std::string("Scene keyframe '") + name + "' is outside the joint limits: " + scene_xml);
             if (self.hasSelfCollision(q) || scene.hasObstacleCollision(q)) throw std::runtime_error(
@@ -1199,14 +1338,14 @@ struct MotionPlanner::Impl {
 
 MotionPlanner::MotionPlanner(const RobotConfig& robot, const std::string& scene_xml,
                              const RRTStarSettings& settings,
-                             const SceneEditor& edit_scene)
-    : impl_(std::make_unique<Impl>(robot, scene_xml, settings, edit_scene)) {}
+                             const ObstacleOptions& obstacles)
+    : impl_(std::make_unique<Impl>(robot, scene_xml, settings, obstacles)) {}
 MotionPlanner::~MotionPlanner() = default;
 const RobotConfig& MotionPlanner::robot() const { return impl_->config; }
 int MotionPlanner::dof() const { return impl_->robot.dof(); }
 
 Eigen::VectorXd MotionPlanner::toSceneQpos(const Eigen::VectorXd& joints) const {
-    return impl_->scene.binding().fullQpos(joints);
+    return impl_->scene_binding.fullQpos(joints);
 }
 
 std::vector<Eigen::VectorXd> MotionPlanner::toSceneTrajectory(
@@ -1218,6 +1357,14 @@ std::vector<Eigen::VectorXd> MotionPlanner::toSceneTrajectory(
 }
 const Pose& MotionPlanner::homePose() const { return impl_->robot.home_pose; }
 const std::optional<Pose>& MotionPlanner::sceneGoal() const { return impl_->fixed_goal; }
+Eigen::VectorXd MotionPlanner::startJoints() const { return impl_->robot.home_qpos; }
+const std::vector<SceneObstacle>& MotionPlanner::obstacles() const { return impl_->obstacles; }
+
+void MotionPlanner::setPointCloud(const PointCloud& cloud) {
+    if (impl_->knownObstacles())
+        throw std::logic_error("setPointCloud needs a planner made with ObstacleSource::PointCloud.");
+    impl_->setPointCloud(cloud);
+}
 
 Pose MotionPlanner::sampleGoal() {
     auto& p = *impl_;

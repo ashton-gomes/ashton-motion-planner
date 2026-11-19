@@ -1,6 +1,6 @@
 <!-- Random cylinders: three posts in front of the robot with a random goal.
      The interactive app moves the posts randomly on every run (see
-     source/sampler.cpp); the benchmark uses the positions written here. -->
+     testbed/src/scene_randomizer.cpp); the benchmark uses the positions written here. -->
 <mujoco model="Random cylinders">
   <include file="../mujoco_menagerie/kinova_gen3/gen3.xml"/>
   <compiler meshdir="../mujoco_menagerie/kinova_gen3/assets"/>
