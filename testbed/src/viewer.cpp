@@ -19,8 +19,6 @@ constexpr double kPlaybackFps = 60.0;
 // which is slow when WSL renders on the CPU (llvmpipe). Set to false for the
 // nicer look.
 constexpr bool kLightweightRendering = true;
-// Scene geometry capacity before any overlay boxes.
-constexpr int kSceneGeoms = 2000;
 
 // Draw meshes with fewer triangles: nearby vertices are merged on a grid with
 // this many cells along each mesh's longest side. Display only; the planner's
@@ -40,9 +38,10 @@ void useWslGpuIfAvailable() {
 
 // Merge vertices that fall in the same grid cell and drop triangles that
 // collapse. Triangles are rewritten in place, so only the face count shrinks.
-void simplifyMeshesForDisplay(mjModel* model, int cells) {
+void simplifyMeshesForDisplay(mjModel* model, int cells, int skip_mesh = -1) {
     if (cells <= 0) return;
     for (int mesh = 0; mesh < model->nmesh; ++mesh) {
+        if (mesh == skip_mesh) continue;
         const int vertex_count = model->mesh_vertnum[mesh];
         const int face_count = model->mesh_facenum[mesh];
         const float* vertices = model->mesh_vert + 3 * model->mesh_vertadr[mesh];
@@ -111,6 +110,80 @@ void hideDuplicateCollisionMeshes(mjModel* model) {
     }
 }
 
+// Name of the mesh that holds every overlay box.
+constexpr const char* kOverlayMesh = "testbed_overlay_boxes";
+
+// All boxes as one closed triangle mesh, 4 vertices per face so each face
+// keeps a flat normal.
+void boxMesh(const std::vector<SceneObstacle>& boxes, std::vector<float>& vertices,
+             std::vector<int>& faces) {
+    for (const SceneObstacle& box : boxes) {
+        for (int axis = 0; axis < 3; ++axis) {
+            const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+            for (const double side : {-1.0, 1.0}) {
+                const int first = static_cast<int>(vertices.size() / 3);
+                // Corners in order around the face, counter-clockwise seen
+                // from outside on the + side; reversed on the - side.
+                for (const auto& [a, b] : {std::pair{-1.0, -1.0}, std::pair{1.0, -1.0},
+                                           std::pair{1.0, 1.0}, std::pair{-1.0, 1.0}}) {
+                    Eigen::Vector3d local;
+                    local[axis] = side;
+                    local[u] = a;
+                    local[v] = b;
+                    const Eigen::Vector3d corner =
+                        box.center + box.rotation * local.cwiseProduct(box.size);
+                    for (int k = 0; k < 3; ++k) vertices.push_back(static_cast<float>(corner[k]));
+                }
+                const int quad[2][3] = {{0, 1, 2}, {0, 2, 3}};
+                for (const auto& triangle : quad) {
+                    if (side > 0) {
+                        for (int corner : triangle) faces.push_back(first + corner);
+                    } else {
+                        for (int k = 2; k >= 0; --k) faces.push_back(first + triangle[k]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Load the scene for display. Overlay boxes are added as a single visual-only
+// mesh geom: drawing them as separate geoms costs a draw call each, which is
+// very slow through WSL's Direct3D 12 OpenGL layer (hundreds of boxes took the
+// viewer from hundreds of frames per second to about 2).
+std::unique_ptr<mjModel, decltype(&mj_deleteModel)> loadDisplayModel(
+    const std::string& scene_path, const std::vector<SceneObstacle>& overlay) {
+    std::unique_ptr<mjModel, decltype(&mj_deleteModel)> model(nullptr, mj_deleteModel);
+    char error[1000]{};
+    if (overlay.empty()) {
+        model.reset(mj_loadXML(scene_path.c_str(), nullptr, error, sizeof(error)));
+        if (!model) std::cerr << error << '\n';
+        return model;
+    }
+    std::unique_ptr<mjSpec, decltype(&mj_deleteSpec)> spec(
+        mj_parseXML(scene_path.c_str(), nullptr, error, sizeof(error)), mj_deleteSpec);
+    if (!spec) {
+        std::cerr << error << '\n';
+        return model;
+    }
+    std::vector<float> vertices;
+    std::vector<int> faces;
+    boxMesh(overlay, vertices, faces);
+    mjsMesh* mesh = mjs_addMesh(spec.get(), nullptr);
+    mjs_setName(mesh->element, kOverlayMesh);
+    mjs_setFloat(mesh->uservert, vertices.data(), static_cast<int>(vertices.size()));
+    mjs_setInt(mesh->userface, faces.data(), static_cast<int>(faces.size()));
+    mjsGeom* geom = mjs_addGeom(mjs_findBody(spec.get(), "world"), nullptr);
+    geom->type = mjGEOM_MESH;
+    mjs_setString(geom->meshname, kOverlayMesh);
+    geom->contype = geom->conaffinity = 0;  // drawn only
+    const float blue[4] = {0.15f, 0.45f, 1.0f, 0.35f};
+    std::copy(blue, blue + 4, geom->rgba);
+    model.reset(mj_compile(spec.get(), nullptr));
+    if (!model) std::cerr << "Overlay compile error: " << mjs_getError(spec.get()) << '\n';
+    return model;
+}
+
 // Play the trajectory once while writing every frame to an MP4 file.
 void recordTrajectory(MujocoViewer& viewer, const std::vector<Eigen::VectorXd>& trajectory,
                       const std::string& video_path) {
@@ -150,16 +223,12 @@ int MujocoViewer::play(const std::string& scene_path,
                        const std::string& video_path,
                        const std::vector<SceneObstacle>& overlay) {
     if (trajectory.empty()) return 1;
-    char error[1000]{};
-    std::unique_ptr<mjModel, decltype(&mj_deleteModel)> model(
-        mj_loadXML(scene_path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
-    if (!model) {
-        std::cerr << error << '\n';
-        return 1;
-    }
+    auto model = loadDisplayModel(scene_path, overlay);
+    if (!model) return 1;
     applyCylinderPlacements(model.get());
     hideDuplicateCollisionMeshes(model.get());
-    simplifyMeshesForDisplay(model.get(), kDisplayMeshDetail);
+    simplifyMeshesForDisplay(model.get(), kDisplayMeshDetail,
+                             mj_name2id(model.get(), mjOBJ_MESH, kOverlayMesh));
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model.get()), mj_deleteData);
     if (!data) return 1;
     for (const auto& joints : trajectory) {
@@ -172,7 +241,6 @@ int MujocoViewer::play(const std::string& scene_path,
     MujocoViewer viewer(model.get(), data.get(), "ScLERP + RMRC | X: red, Y: green, Z: blue");
     if (!viewer.is_open()) return 1;
     viewer.pose_markers_ = {start, end};
-    viewer.set_overlay(overlay);
     if (!video_path.empty()) recordTrajectory(viewer, trajectory, video_path);
     const double start_time = glfwGetTime();
     while (viewer.is_open()) {
@@ -202,30 +270,6 @@ void MujocoViewer::draw_pose_marker(const Eigen::Matrix<double, 7, 1>& pose,
         mjvGeom* arrow = &scn_.geoms[scn_.ngeom++];
         mjv_initGeom(arrow, mjGEOM_ARROW, nullptr, nullptr, nullptr, colors[axis]);
         mjv_connector(arrow, mjGEOM_ARROW, 0.004, position.data(), tip.data());
-    }
-}
-
-void MujocoViewer::set_overlay(const std::vector<SceneObstacle>& boxes) {
-    overlay_ = boxes;
-    if (window_) make_scene(kSceneGeoms + static_cast<int>(overlay_.size()));
-}
-
-void MujocoViewer::draw_overlay() {
-    const float blue[4] = {0.15f, 0.45f, 1.0f, 0.35f};
-    for (const SceneObstacle& box : overlay_) {
-        if (scn_.ngeom >= scn_.maxgeom) return;
-        const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rotation = box.rotation;
-        mjv_initGeom(&scn_.geoms[scn_.ngeom++], mjGEOM_BOX, box.size.data(),
-                     box.center.data(), rotation.data(), blue);
-    }
-}
-
-void MujocoViewer::make_scene(int max_geoms) {
-    mjv_freeScene(&scn_);
-    mjv_makeScene(m_, &scn_, max_geoms);
-    if (kLightweightRendering) {
-        scn_.flags[mjRND_SHADOW] = 0;
-        scn_.flags[mjRND_REFLECTION] = 0;
     }
 }
 
@@ -268,9 +312,13 @@ MujocoViewer::MujocoViewer(mjModel* model, mjData* data, const std::string& titl
     mjv_defaultScene(&scn_);
     mjr_defaultContext(&con_);
 
-    // Allocate scene geometry buffers and OpenGL context
-    make_scene(kSceneGeoms);
+    // Allocate scene geometry buffers (max 2000 geoms) and OpenGL context
+    mjv_makeScene(m_, &scn_, 2000);
     mjr_makeContext(m_, &con_, mjFONTSCALE_150);
+    if (kLightweightRendering) {
+        scn_.flags[mjRND_SHADOW] = 0;
+        scn_.flags[mjRND_REFLECTION] = 0;
+    }
 
     // Set initial camera perspective
     cam_.type = mjCAMERA_FREE;
@@ -315,7 +363,6 @@ void MujocoViewer::render(Frame* capture) {
         draw_pose_marker(pose_markers_[0], "Start");
         draw_pose_marker(pose_markers_[1], "End");
     }
-    draw_overlay();
 
     // Render scene into OpenGL frame buffer
     mjr_render(viewport, &scn_, &con_);
